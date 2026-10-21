@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="../public/sheba-icon.svg" />
+    <title>תצוגת עיצוב — LabExtract AI</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar__inner">
+        <a class="brand" href="#" aria-label="LabExtract AI">
+          <img class="brand__logo" src="../public/sheba-logo.svg" alt="לוגו המרכז הרפואי שיבא" />
+          <span class="brand__copy">
+            <strong>LabExtract AI</strong>
+            <small>מערכת עיבוד טפסי התחייבויות</small>
+          </span>
+        </a>
+        <nav class="navigation" aria-label="ניווט ראשי">
+          <a class="navigation__link navigation__link--active" href="#">סקירת התחייבויות</a>
+        </nav>
+        <span class="environment">תצוגה מקדימה</span>
+      </div>
+    </header>
+
+    <main class="page">
+      <div class="page__heading">
+        <div>
+          <p class="eyebrow">מרכז סקירה חכם</p>
+          <h1>סקירת התחייבויות</h1>
+          <p class="page__description">כל המסמכים והנתונים במקום אחד</p>
+        </div>
+        <button class="button button--primary" type="button">＋ העלאת מסמך</button>
+      </div>
+
+      <section class="document-card" aria-label="בחירת מסמך">
+        <div class="document-card__file">
+          <span class="file-icon" aria-hidden="true">PDF</span>
+          <span>
+            <small>מסמך נבחר</small>
+            <strong>טפסי התחייבות — אוקטובר.pdf</strong>
+          </span>
+        </div>
+        <span class="status"><span class="status__dot"></span> העיבוד הושלם</span>
+        <button class="button button--secondary" type="button">בחירת מסמך⌄</button>
+      </section>
+
+      <section class="summary" aria-label="סיכום אצווה">
+        <div class="summary__item">
+          <span class="summary__number">24</span>
+          <span class="summary__label">התחייבויות</span>
+        </div>
+        <div class="summary__item summary__item--review">
+          <span class="summary__number">7</span>
+          <span class="summary__label">דורשות בדיקה</span>
+        </div>
+        <div class="summary__item summary__item--ready">
+          <span class="summary__number">17</span>
+          <span class="summary__label">מוכנות</span>
+        </div>
+        <p class="summary__note">עודכן היום, 09:42</p>
+      </section>
+
+      <section class="workspace" aria-label="טבלת התחייבויות">
+        <div class="tabs" role="tablist" aria-label="סינון התחייבויות">
+          <button class="tab tab--active" type="button" role="tab" aria-selected="true">
+            דורשות בדיקה <span class="count count--alert">7</span>
+          </button>
+          <button class="tab" type="button" role="tab" aria-selected="false">
+            מוכנות <span class="count">17</span>
+          </button>
+          <button class="tab" type="button" role="tab" aria-selected="false">
+            הכול <span class="count">24</span>
+          </button>
+        </div>
+
+        <div class="toolbar">
+          <label class="search">
+            <span aria-hidden="true">⌕</span>
+            <input type="search" placeholder="חיפוש לפי שם, ת.ז. או מספר התחייבות…" />
+          </label>
+          <button class="button button--secondary" type="button">ייצוא ל־Excel</button>
+        </div>
+
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">שם המטופל/ת</th>
+                <th scope="col">תעודת זהות</th>
+                <th scope="col">מספר התחייבות</th>
+                <th scope="col">תאריך קבלת דגימה</th>
+                <th scope="col">סטטוס סקירה</th>
+                <th scope="col"><span class="visually-hidden">פתיחת מסמך</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="row--selected">
+                <td><strong>דוגמה לבדיקה</strong></td>
+                <td class="ltr">•••••••••</td>
+                <td class="ltr">12345678</td>
+                <td>20.10.2026</td>
+                <td><span class="badge badge--review">נדרשת בדיקה</span></td>
+                <td><button class="icon-button" type="button" aria-label="פתיחת מסמך">←</button></td>
+              </tr>
+              <tr>
+                <td><strong>רשומה לדוגמה</strong></td>
+                <td class="ltr">•••••••••</td>
+                <td class="ltr">23456789</td>
+                <td>19.10.2026</td>
+                <td><span class="badge badge--ready">מוכנה</span></td>
+                <td><button class="icon-button" type="button" aria-label="פתיחת מסמך">←</button></td>
+              </tr>
+              <tr>
+                <td><strong>רשומה לדוגמה</strong></td>
+                <td class="ltr">•••••••••</td>
+                <td class="ltr">34567890</td>
+                <td>18.10.2026</td>
+                <td><span class="badge badge--review">נדרשת בדיקה</span></td>
+                <td><button class="icon-button" type="button" aria-label="פתיחת מסמך">←</button></td>
+              </tr>
+              <tr>
+                <td><strong>רשומה לדוגמה</strong></td>
+                <td class="ltr">•••••••••</td>
+                <td class="ltr">45678901</td>
+                <td>17.10.2026</td>
+                <td><span class="badge badge--ready">מוכנה</span></td>
+                <td><button class="icon-button" type="button" aria-label="פתיחת מסמך">←</button></td>
+              </tr>
+              <tr>
+                <td><strong>רשומה לדוגמה</strong></td>
+                <td class="ltr">•••••••••</td>
+                <td class="ltr">56789012</td>
+                <td>16.10.2026</td>
+                <td><span class="badge badge--ready">מוכנה</span></td>
+                <td><button class="icon-button" type="button" aria-label="פתיחת מסמך">←</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <footer class="workspace__footer">
+          <span>מוצגות 5 מתוך 24 התחייבויות</span>
+          <span>הנתונים במסך זה להמחשה בלבד</span>
+        </footer>
+      </section>
+    </main>
+  </body>
+</html>
