@@ -113,6 +113,33 @@ def _needs_ocr(form: Form) -> bool:
     return exam is not None and bool(NO_TEXT_FLAGS & set(exam.first_name.flags))
 
 
+def page_count(content: bytes, extension: str) -> int:
+    if extension != ".pdf":
+        return 1
+    import pymupdf
+    with pymupdf.open(stream=content, filetype="pdf") as document:
+        return document.page_count
+
+
+def extract_page(file_id: str, content: bytes, extension: str, page: int) -> Form:
+    """The form of ONE 0-based page, with the same engine rules as extract_document. One page of OCR fits one
+    request, whatever the length of the document."""
+    if not 0 <= page < page_count(content, extension):
+        raise IndexError(page)
+    mode = engine_mode()
+    if mode == "ocr":
+        return ocr_pages(file_id, content, extension, [page])[page]
+    if extension == ".pdf":
+        import pymupdf
+        with pymupdf.open(stream=content, filetype="pdf") as document:
+            form = pdf_text.extract_page(file_id, page, document[page])
+    else:
+        [form] = pdf_text.extract_document(file_id, content, extension)
+    if mode == "hybrid" and _needs_ocr(form):
+        return ocr_pages(file_id, content, extension, [page])[page]
+    return form
+
+
 def extract_document(file_id: str, content: bytes, extension: str) -> list[Form]:
     """One form per page, as pdf_text.extract_document; the engine is chosen by LABEXTRACT_ENGINE."""
     mode = engine_mode()

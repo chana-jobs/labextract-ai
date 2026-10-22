@@ -30,7 +30,7 @@ import type {
 export type DocLoad =
   | { state: "loading" }
   | { state: "pending" }            // QUEUED/RUNNING or drafts not initialised
-  | { state: "processing" }         // explicit init in flight
+  | { state: "processing"; done?: number; total?: number }   // explicit processing in flight (pages done / total)
   | { state: "ready"; forms: Form[] }
   | { state: "error"; message: string };
 
@@ -194,6 +194,7 @@ export function buildExceptionForms(docs: DocEntry[]): FormRecord[] {
       const reasons: string[] = [];
       // A technical failure is not an empty form: say so instead of "no commitments extracted".
       if (form.processing_status === "FAILED") reasons.push("כשל טכני בעיבוד — יש להזין ערכים מהמקור");
+      else if (form.processing_status === "QUEUED" || form.processing_status === "RUNNING") reasons.push("העמוד עדיין לא עובד — יש להשלים את העיבוד");
       else if (!form.examinations.some((e) => e.commitments.length > 0)) reasons.push("לא חולצו התחייבויות");
       for (const issue of form.issues) {
         if (issue.resolution_state === "CLOSED") continue;

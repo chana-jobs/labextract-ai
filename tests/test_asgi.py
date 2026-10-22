@@ -34,13 +34,8 @@ def test_api_is_served_under_api_only():
 
 
 def test_vercel_function_entry_is_the_same_app_with_nested_routes():
-    import json
-    from pathlib import Path
     import api.index as entry
     assert entry.app is app
-    config = json.loads((Path(__file__).resolve().parents[1] / "vercel.json").read_text(encoding="utf-8"))
-    assert list(config["functions"]) == ["api/index.py"]
-    assert config["rewrites"] == [{"source": "/api/(.*)", "destination": "/api/index"}]
     client = TestClient(entry.app, base_url="https://testserver")
     assert client.get("/api/health").json() == {"status": "ok"}
     for method, path in [("GET", "/api/auth/me"), ("GET", "/api/documents"),
@@ -52,22 +47,22 @@ def test_vercel_function_entry_is_the_same_app_with_nested_routes():
     assert client.get("/").status_code == 404 and client.get("/api/index").status_code == 404
 
 
-def test_deployment_dependencies_are_pinned_and_dev_files_excluded():
+def test_deployment_is_one_container_with_pinned_dependencies():
+    """Deployed as a single Vercel container (Dockerfile.vercel): no separate Python function competes for /api."""
     import json
     import re
-    from fnmatch import fnmatch
     from pathlib import Path
     root = Path(__file__).resolve().parents[1]
     lines = [l.strip() for l in (root / "requirements.txt").read_text(encoding="utf-8").splitlines() if l.strip()]
     assert lines and all(re.fullmatch(r"[A-Za-z0-9_.-]+==[0-9][0-9A-Za-z.]*", l) for l in lines), lines
-    excluded = json.loads((root / "vercel.json").read_text(encoding="utf-8"))["functions"]["api/index.py"]["excludeFiles"]
-    patterns = excluded.strip("{}").split(",")
-    for path in (".venv/lib/x.py", "frontend/node_modules/x.js", "tests/test_x.py", "local_uploads/x.pdf"):
-        assert any(fnmatch(path, p) for p in patterns), path
-    # the function's own environment, built by Vercel, must never be excluded
-    assert not any(fnmatch(".vercel/python/.venv/lib/site-packages/fastapi/__init__.py", p) for p in patterns
-                   if not p.startswith("**/"))
-    assert ".vercel" not in excluded
+    config = json.loads((root / "vercel.json").read_text(encoding="utf-8"))
+    assert "functions" not in config and "rewrites" not in config and "buildCommand" not in config
+    read = lambda name: (root / name).read_text(encoding="utf-8").replace("\r\n", "\n")
+    assert read("Dockerfile.vercel") == read("Dockerfile")
+    ignored = read(".vercelignore").splitlines()
+    assert "/api/" in ignored and "api/" not in ignored          # unanchored would also drop frontend/src/api
+    for secret in (".env", ".env.*"):
+        assert secret in ignored
 
 
 def test_sign_in_and_same_origin_under_api():

@@ -15,10 +15,11 @@ PRIMARY_KEYS = {
     "lx_workspace_members": ("user_id", "workspace_id"),
 }
 
-# Bucket settings as created by migrations/001_labextract_init.sql (Supabase rejects other uploads).
+# Bucket settings as created by migrations/001_labextract_init.sql and raised by 002_direct_upload_size.sql
+# (Supabase rejects other uploads).
 BUCKETS = {
     "labextract-originals": {"allowed_mime_types": {"application/pdf", "image/jpeg", "image/png"},
-                             "file_size_limit": 4 * 1024 * 1024},
+                             "file_size_limit": 20 * 1024 * 1024},
 }
 
 
@@ -31,6 +32,7 @@ class FakeSupabase:
         self.object_types: dict[str, str] = {}
         self.requests: list[tuple[str, str]] = []
         self.fail_next: dict[str, int] = {}     # e.g. {"POST documents": 500}
+        self.signed: dict[str, str] = {}        # token -> object path
 
     # -- helpers
     @staticmethod
@@ -95,7 +97,30 @@ class FakeSupabase:
             return 200, (json.dumps(selected).encode() if "return=representation" in prefer else b"")
         raise AssertionError(f"unexpected {method}")
 
+    # -- signed URLs (service key) and the browser's PUT to a signed upload URL (no key)
+    def _sign(self, kind, path, body):
+        token = f"tok{len(self.signed)}"
+        self.signed[token] = path
+        if kind == "upload/sign":
+            return 200, json.dumps({"url": f"/object/upload/sign/{urllib.parse.quote(path)}?token={token}"}).encode()
+        assert json.loads(body).get("expiresIn"), "a download link must expire"
+        return 200, json.dumps({"signedURL": f"/object/sign/{urllib.parse.quote(path)}?token={token}"}).encode()
+
+    def client_put(self, url: str, body: bytes, headers: dict) -> int:
+        """What a browser does with create_upload_target(): PUT the bytes to the signed URL, without any key."""
+        parsed = urllib.parse.urlsplit(url)
+        assert parsed.path.startswith("/storage/v1/object/upload/sign/") and headers.get("apikey") != self.key
+        assert "Authorization" not in headers
+        token = urllib.parse.parse_qs(parsed.query)["token"][0]
+        path = self.signed.get(token)
+        if path != urllib.parse.unquote(parsed.path[len("/storage/v1/object/upload/sign/"):]):
+            return 403
+        return self._storage("POST", path, headers, body)[0]
+
     def _storage(self, method, path, headers, body):
+        for kind in ("upload/sign", "sign"):
+            if method == "POST" and path.startswith(kind + "/"):
+                return self._sign(kind, path[len(kind) + 1:], body)
         if method == "POST":
             bucket = BUCKETS[path.split("/", 1)[0]]
             if headers.get("Content-Type") not in bucket["allowed_mime_types"]:

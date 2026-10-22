@@ -90,6 +90,18 @@ class Repository(Protocol):
 
     def save_drafts(self, workspace_id: str, file_id: str, forms: list[dict], expected_version: int) -> int: ...
 
+    # -- direct upload: the browser sends the original to storage, never through a function body
+    def create_upload_target(self, workspace_id: str, file_id: str, extension: str, content_type: str) -> dict: ...
+
+    def read_staged(self, workspace_id: str, file_id: str, extension: str) -> bytes | None: ...
+
+    def discard_staged(self, workspace_id: str, file_id: str, extension: str) -> None: ...
+
+    def register_document(self, workspace_id: str, metadata: dict, *, extension: str, sha256: str,
+                          content_type: str, size_bytes: int) -> None: ...
+
+    def original_link(self, workspace_id: str, file_id: str, min_bytes: int) -> str | None: ...
+
     def create_session(self, token_hash: str, session: Session) -> None: ...
 
     def get_session(self, token_hash: str) -> Session | None: ...
@@ -239,6 +251,58 @@ class LocalRepository:
             version = expected_version + 1
             _write_atomic(self._path(file_id, ".drafts.json"), _json_bytes({"version": version, "forms": forms}))
             return version
+
+    # -- direct upload (local: the "storage" target is the API's own PUT route)
+    def _staged(self, workspace_id, file_id) -> dict | None:
+        path = self._path(file_id, ".staged.json")
+        if not path.is_file():
+            return None
+        staged = json.loads(path.read_text(encoding="utf-8"))
+        return staged if staged["workspace_id"] == workspace_id else None
+
+    def create_upload_target(self, workspace_id, file_id, extension, content_type):
+        check_content_type(extension, content_type)
+        self.folder.mkdir(parents=True, exist_ok=True)
+        _write_atomic(self._path(file_id, ".staged.json"), _json_bytes({
+            "workspace_id": workspace_id, "extension": extension, "content_type": content_type,
+        }))
+        return {"method": "PUT", "api_path": f"/documents/uploads/{file_id}/content",
+                "headers": {"Content-Type": content_type}}
+
+    def store_staged(self, workspace_id: str, file_id: str, content: bytes) -> None:
+        """Local only: the body of the PUT returned by create_upload_target."""
+        staged = self._staged(workspace_id, file_id)
+        if staged is None or self._path(file_id, ".json").is_file():
+            raise KeyError(file_id)
+        _write_atomic(self._path(file_id, staged["extension"]), content)
+
+    def read_staged(self, workspace_id, file_id, extension):
+        staged = self._staged(workspace_id, file_id)
+        if staged is None or staged["extension"] != extension:
+            return None
+        path = self._path(file_id, extension)
+        return path.read_bytes() if path.is_file() else None
+
+    def discard_staged(self, workspace_id, file_id, extension):
+        if self._staged(workspace_id, file_id) is None:
+            return
+        self._path(file_id, extension).unlink(missing_ok=True)
+        self._path(file_id, ".staged.json").unlink(missing_ok=True)
+
+    def register_document(self, workspace_id, metadata, *, extension, sha256, content_type, size_bytes):
+        check_content_type(extension, content_type)
+        file_id = metadata["file_id"]
+        if self._staged(workspace_id, file_id) is None:
+            raise KeyError(file_id)
+        _write_atomic(self._path(file_id, ".owner.json"), _json_bytes({
+            "workspace_id": workspace_id, "extension": extension, "content_type": content_type,
+            "sha256": sha256, "size_bytes": size_bytes,
+        }))
+        _write_atomic(self._path(file_id, ".json"), _json_bytes(metadata))
+        self._path(file_id, ".staged.json").unlink(missing_ok=True)
+
+    def original_link(self, workspace_id, file_id, min_bytes):
+        return None         # local files are always served by the API itself
 
     # -- sessions and membership
     def _read_table(self, name: str) -> dict:

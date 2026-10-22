@@ -406,6 +406,9 @@ export default function ReviewWorkspaceV2() {
                 <button type="button" className="btn btn--secondary btn--sm" onClick={() => void data.processDoc(meta.file_id)}>נסי שוב</button>
               )}
               {(load.state === "processing" || load.state === "loading") && <span className="spinner" aria-hidden="true" />}
+              {load.state === "processing" && load.total !== undefined && load.total > 1 && (
+                <span className="v2-docstate__msg" aria-live="polite">עמוד {Math.min((load.done ?? 0) + 1, load.total)} מתוך {load.total}</span>
+              )}
             </li>
           ))}
         </ul>

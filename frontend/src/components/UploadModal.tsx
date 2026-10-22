@@ -26,7 +26,8 @@ import { uploadDocument, ApiError } from "../api/client";
 const USE_MOCK = import.meta.env.VITE_USE_MOCK === "true";
 const ACCEPTED_TYPES = new Set(["application/pdf", "image/jpeg", "image/png"]);
 const ACCEPTED_EXTENSIONS = new Set([".pdf", ".jpg", ".jpeg", ".png"]);
-const MAX_SIZE_MB = 4;
+// direct upload to storage (server: LABEXTRACT_MAX_DIRECT_UPLOAD_MB; bucket: migrations/002_direct_upload_size.sql)
+const MAX_SIZE_MB = 20;
 
 // ----------------------------------------------------------------- types
 

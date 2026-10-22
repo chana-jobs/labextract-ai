@@ -160,9 +160,66 @@ export async function getDocument(fileId: string): Promise<DocumentMeta> {
   return request("GET", `/documents/${fileId}`);
 }
 
-/** POST /documents/upload — upload PDF/JPG/PNG (multipart/form-data) */
+/** POST /documents/upload accepts up to 4 MB (the function body limit is about 4.5 MB). */
+const MULTIPART_MAX_BYTES = 4 * 1024 * 1024;
+
+interface DirectUploadStart {
+  file_id: string;
+  upload: { method: string; url?: string; api_path?: string; headers: Record<string, string> };
+  max_bytes: number;
+}
+
+/** A route the server does not have (an older deployment), as opposed to a missing document. */
+function isMissingRoute(err: unknown): boolean {
+  if (!(err instanceof ApiError)) return false;
+  if (err.status === 405) return true;
+  const detail = (err.body as { detail?: unknown } | null)?.detail;
+  return err.status === 404 && detail === "Not Found";
+}
+
+/**
+ * Upload PDF/JPG/PNG. Large files go straight to storage (POST /documents/uploads -> PUT to the signed target ->
+ * POST /documents/uploads/:id/complete), so they are not bound by the 4.5 MB function body limit. A server
+ * without direct upload falls back to POST /documents/upload. Same DocumentMeta either way.
+ */
 export async function uploadDocument(file: File): Promise<DocumentMeta> {
   if (USE_MOCK) return mockUploadDocument(file);
+  let started: DirectUploadStart;
+  try {
+    started = await request<DirectUploadStart>("POST", "/documents/uploads", { filename: file.name, size: file.size });
+  } catch (err) {
+    if (isMissingRoute(err)) return uploadDocumentMultipart(file);
+    throw err;
+  }
+  const generation = authSessionGeneration;
+  const { upload } = started;
+  let res: Response;
+  try {
+    res = await fetchInAuthSession(upload.api_path ? `${BASE_URL}${upload.api_path}` : upload.url ?? "", {
+      method: upload.method,
+      headers: upload.headers,
+      body: file,
+      // only the API's own route needs the session cookie; a signed storage URL carries its own short-lived token
+      credentials: upload.api_path ? "include" : "omit",
+    });
+  } catch (err) {
+    // storage unreachable from this network (e.g. a filtering proxy): a small file can still go through the API
+    if (err instanceof TypeError && file.size <= MULTIPART_MAX_BYTES) return uploadDocumentMultipart(file);
+    throw err;
+  }
+  if (!isAuthSessionCurrent(generation)) {
+    throw new DOMException("Authentication session changed", "AbortError");
+  }
+  if (!res.ok) {
+    let errorBody: unknown;
+    try { errorBody = await res.json(); } catch { errorBody = await res.text(); }
+    throw new ApiError(res.status, errorBody, `Upload failed: HTTP ${res.status}`);
+  }
+  return request<DocumentMeta>("POST", `/documents/uploads/${started.file_id}/complete`, { filename: file.name });
+}
+
+/** POST /documents/upload — upload PDF/JPG/PNG (multipart/form-data, up to the function body limit) */
+async function uploadDocumentMultipart(file: File): Promise<DocumentMeta> {
   const generation = authSessionGeneration;
   const form = new FormData();
   form.append("file", file);
@@ -194,6 +251,30 @@ export async function uploadDocument(file: File): Promise<DocumentMeta> {
 export async function initDrafts(fileId: string): Promise<void> {
   if (USE_MOCK) return mockInitDrafts(fileId);
   return request("POST", `/documents/${fileId}/drafts/init`);
+}
+
+/**
+ * Extract a document page by page: POST /documents/:fileId/drafts/pages/:n, one request per page, so a long
+ * document never exceeds the function time limit. Pages already processed return at once, so calling it again
+ * resumes where it stopped. A server without page processing falls back to drafts/init.
+ */
+export async function processDocument(
+  fileId: string,
+  pageCount: number,
+  onProgress?: (done: number, total: number) => void
+): Promise<void> {
+  if (USE_MOCK) return mockInitDrafts(fileId);
+  const total = Math.max(pageCount, 1);
+  for (let page = 1; page <= total; page += 1) {
+    onProgress?.(page - 1, total);
+    try {
+      await request("POST", `/documents/${fileId}/drafts/pages/${page}`);
+    } catch (err) {
+      if (page === 1 && isMissingRoute(err)) return initDrafts(fileId);
+      throw err;
+    }
+  }
+  onProgress?.(total, total);
 }
 
 /** GET /documents/:fileId/drafts */
