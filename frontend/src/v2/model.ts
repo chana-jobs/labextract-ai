@@ -39,6 +39,11 @@ export interface DocEntry {
   load: DocLoad;
 }
 
+/** 1-based page numbers whose processing FAILED (the server stores one form per page, in page order). */
+export function failedPages(forms: Form[]): number[] {
+  return forms.flatMap((form, index) => (form.processing_status === "FAILED" ? [index + 1] : []));
+}
+
 export function uploadedAt(meta: DocumentMeta): string {
   return meta.uploaded_at ?? meta.upload_date ?? "";
 }
