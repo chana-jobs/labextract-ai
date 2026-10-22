@@ -177,9 +177,14 @@ def test_document_without_text_layer_is_marked_unsupported(content, name, media)
     [form] = client.post(f"/documents/{file_id}/drafts/init").json()
     exam = form["examinations"][0]
     assert exam["first_name"]["normalized"] is None and "no_text_layer" in exam["first_name"]["flags"]
-    assert exam["commitments"] == [] and form["issues"][0]["reason"] == "COMMITMENT_COUNT_UNCERTAIN"
+    assert form["issues"][0]["reason"] == "COMMITMENT_COUNT_UNCERTAIN"
     assert "OCR is not available" in form["issues"][0]["note"]
-    assert client.get(f"/documents/{file_id}/export.xlsx?confirm_partial=true").status_code == 409
+    # one row to review: existence uncertain, number empty and pending; nothing invented
+    [row] = exam["commitments"]
+    assert row["existence_status"] == "UNCERTAIN" and row["number"]["normalized"] is None
+    assert row["number"]["extraction_status"] == "MISSING" and row["number"]["approval_status"] == "PENDING"
+    summary = client.get(f"/documents/{file_id}/export/summary").json()
+    assert summary["rows"] == 1 and summary["ready"] == 0 and summary["is_partial"]
 
 
 # ---- isolation, cross-site, limits, headers ------------------------------------------------------

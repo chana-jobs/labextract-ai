@@ -24,7 +24,10 @@ from functools import lru_cache
 from pathlib import Path
 
 from extraction import pdf_text
-from shared.contracts import Form, Issue, IssueReason, ProcessingStatus, SplitStatus
+from shared.contracts import (
+    Commitment, ExistenceStatus, ExtractionStatus, FieldName, FieldValue, Form, Issue, IssueReason, ProcessingStatus,
+    SplitStatus, UncertaintyReason,
+)
 
 ENGINES = ("pdf_text", "hybrid", "ocr")
 NO_TEXT_FLAGS = {"no_text_layer", "text_order_unsupported"}
@@ -121,9 +124,43 @@ def page_count(content: bytes, extension: str) -> int:
         return document.page_count
 
 
+def with_review_row(form: Form) -> Form:
+    """A processed form in which no commitment was identified still gets ONE row to review: existence UNCERTAIN,
+    number empty (MISSING), PENDING, plus the form-level count issue. Its other extracted fields (names, ID, ...)
+    are then visible and editable in the review grid instead of disappearing with the form. Nothing is invented:
+    the number stays empty until a person enters it from the source."""
+    if form.processing_status != ProcessingStatus.DONE or not form.examinations:
+        return form
+    exam = form.examinations[0]
+    if exam.commitments:
+        return form
+    form = form.model_copy(deep=True)
+    exam = form.examinations[0]
+    page = form.page_regions[0]["page"] if form.page_regions else 0
+    exam.commitments.append(Commitment(
+        commitment_id=f"{form.form_id}-c1", examination_id=exam.examination_id,
+        existence_status=ExistenceStatus.UNCERTAIN, origin_anchor=f"p{page}:no_commitment_identified",
+        number=FieldValue(field_name=FieldName.COMMITMENT_NUMBER, extraction_status=ExtractionStatus.MISSING,
+                          uncertainty_reason=[UncertaintyReason.UNGROUNDED], flags=["no_commitment_identified"])))
+    if not any(i.reason == IssueReason.COMMITMENT_COUNT_UNCERTAIN for i in form.issues):
+        form.issues.append(Issue(issue_id=f"{form.form_id}-count", form_id=form.form_id,
+                                 reason=IssueReason.COMMITMENT_COUNT_UNCERTAIN,
+                                 note="No commitment number was identified; enter it from the source"))
+    return Form.model_validate(form.model_dump())
+
+
 def extract_page(file_id: str, content: bytes, extension: str, page: int) -> Form:
     """The form of ONE 0-based page, with the same engine rules as extract_document. One page of OCR fits one
     request, whatever the length of the document."""
+    return with_review_row(_extract_page(file_id, content, extension, page))
+
+
+def extract_document(file_id: str, content: bytes, extension: str) -> list[Form]:
+    """One form per page, as pdf_text.extract_document; the engine is chosen by LABEXTRACT_ENGINE."""
+    return [with_review_row(form) for form in _extract_document(file_id, content, extension)]
+
+
+def _extract_page(file_id: str, content: bytes, extension: str, page: int) -> Form:
     if not 0 <= page < page_count(content, extension):
         raise IndexError(page)
     mode = engine_mode()
@@ -140,8 +177,7 @@ def extract_page(file_id: str, content: bytes, extension: str, page: int) -> For
     return form
 
 
-def extract_document(file_id: str, content: bytes, extension: str) -> list[Form]:
-    """One form per page, as pdf_text.extract_document; the engine is chosen by LABEXTRACT_ENGINE."""
+def _extract_document(file_id: str, content: bytes, extension: str) -> list[Form]:
     mode = engine_mode()
     if mode == "pdf_text":
         return pdf_text.extract_document(file_id, content, extension)

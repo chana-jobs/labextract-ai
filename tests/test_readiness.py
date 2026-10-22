@@ -176,3 +176,35 @@ def test_d_extraction_is_never_auto_approved_but_human_approval_reaches_ready(re
     # E: the export agrees with the server classification of the stored form
     stored = Form.model_validate(client.get(f"/documents/{file_id}/drafts").json()[0])
     assert _status(stored) == CommitmentStatus.READY
+
+
+def test_form_without_an_identified_commitment_number_is_a_row_to_review(repo):
+    """The other fields are extracted; the missing commitment number is an empty cell to fill, not a lost form."""
+    doc = pymupdf.open()
+    page = doc.new_page()
+    for n, text in enumerate(["First name: Dana", "Last name: Levi", "Israeli ID: 000000018"]):
+        page.insert_text((72, 80 + 24 * n), text, fontsize=11)
+    file_id = client.post("/documents/upload", files={"file": ("s.pdf", doc.tobytes(), "application/pdf")}).json()["file_id"]
+    [form] = client.post(f"/documents/{file_id}/drafts/init").json()
+    exam = form["examinations"][0]
+    assert exam["first_name"]["normalized"] == "Dana" and exam["israeli_id"]["normalized"] == "000000018"
+    [row] = exam["commitments"]
+    assert row["existence_status"] == "UNCERTAIN" and row["number"]["normalized"] is None
+    stored = Form.model_validate(form)
+    assert _status(stored) == CommitmentStatus.NEEDS_REVIEW
+    summary = client.get(f"/documents/{file_id}/export/summary").json()
+    assert summary["rows"] == 1 and summary["ready"] == 0          # the row is exported, never as ready
+
+    # a person enters the number from the source and approves it: existence is no longer in doubt
+    target = {"field": "commitment_number", "commitment_id": row["commitment_id"]}
+    saved = client.patch(f"/review/{file_id}/{form['form_id']}/field",
+                         json={"target": target, "value": "000730001", "expected_version": row["number"]["version"]})
+    assert saved.status_code == 200
+    r = client.post(f"/review/{file_id}/{form['form_id']}/field/approval",
+                    json={"target": target, "action": "APPROVE", "expected_version": saved.json()["field"]["version"]})
+    assert r.status_code == 200
+    stored = Form.model_validate(client.get(f"/documents/{file_id}/drafts").json()[0])
+    number = stored.examinations[0].commitments[0].number
+    assert number.normalized == "000730001" and number.approval_status == ApprovalStatus.HUMAN_APPROVED
+    # the count of commitments on the form is still unconfirmed: the row stays in review until it is confirmed
+    assert _status(stored) == CommitmentStatus.NEEDS_REVIEW

@@ -62,7 +62,8 @@ def test_default_is_pdf_text_and_never_calls_ocr(monkeypatch, fake_ocr):
     monkeypatch.delenv("LABEXTRACT_ENGINE", raising=False)
     forms = engine_select.extract_document(FID, _pdf("text", "scan"), ".pdf")
     assert fake_ocr[0].calls == []
-    assert forms[1].examinations[0].commitments == []
+    [row] = forms[1].examinations[0].commitments            # the review row only: nothing read, nothing invented
+    assert row.existence_status.value == "UNCERTAIN" and row.number.normalized is None
 
 
 def test_hybrid_sends_only_scanned_pages_to_ocr(monkeypatch, fake_ocr):
