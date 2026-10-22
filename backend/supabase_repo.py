@@ -145,11 +145,16 @@ class SupabaseRepository:
     def register_document(self, workspace_id, metadata, *, extension, sha256, content_type, size_bytes):
         check_content_type(extension, content_type)
         file_id = validate_file_id(metadata["file_id"])
-        self._rest("POST", T_DOCUMENTS, payload={
-            "file_id": file_id, "workspace_id": workspace_id, "metadata": metadata,
-            "extension": extension, "sha256": sha256, "size_bytes": size_bytes,
-            "storage_path": self._staged_path(workspace_id, file_id, extension),
-        })
+        try:
+            self._rest("POST", T_DOCUMENTS, payload={
+                "file_id": file_id, "workspace_id": workspace_id, "metadata": metadata,
+                "extension": extension, "sha256": sha256, "size_bytes": size_bytes,
+                "storage_path": self._staged_path(workspace_id, file_id, extension),
+            })
+        except StorageError:
+            # no metadata row: remove the uploaded object so nothing unreferenced stays stored
+            self.discard_staged(workspace_id, file_id, extension)
+            raise
 
     def original_link(self, workspace_id, file_id, min_bytes):
         """A short-lived signed download URL for an original too large for a function response."""
