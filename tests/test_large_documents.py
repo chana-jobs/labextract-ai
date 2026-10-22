@@ -138,6 +138,16 @@ def test_supabase_invalid_upload_is_deleted(fake):
     assert fake.objects == {} and fake.tables["lx_documents"] == []
 
 
+def test_supabase_upload_is_deleted_when_the_document_row_is_refused(fake):
+    """E.g. a database check that still allows only 4 MB: no orphan object is left in storage."""
+    started = _start("a.pdf", 10).json()
+    fake.client_put(started["upload"]["url"], _pdf("text"), started["upload"]["headers"])
+    fake.fail_next["POST lx_documents"] = 400
+    with pytest.raises(Exception):
+        client.post(f"/documents/uploads/{started['file_id']}/complete", json={"filename": "a.pdf"})
+    assert fake.objects == {} and fake.tables["lx_documents"] == []
+
+
 def test_small_supabase_original_is_still_served_inline(fake):
     started = _start("s.pdf", 10).json()
     content = _pdf("text")
