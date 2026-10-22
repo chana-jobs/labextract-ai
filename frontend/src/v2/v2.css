@@ -142,6 +142,8 @@
 .v2-cell__value:focus-visible { outline: 2px solid var(--v2-accent); }
 .v2-cell--pending, .v2-cell--missing { background: var(--cell-pending-bg); box-shadow: inset -2px 0 0 var(--cell-pending-indicator); }
 .v2-cell--absent { color: var(--v2-gap-ink); }
+/* certain value: read-only in the grid, plain white (approval stays in the side panel) */
+.v2-cell--locked { background: #fff; box-shadow: none; cursor: default; }
 .v2-cell--selected { outline: 2px solid var(--v2-accent); outline-offset: -1px; }
 .v2-cell__hint { color: var(--v2-review-ink); font-style: italic; opacity: 0.85; }
 .v2-cell__flag {
