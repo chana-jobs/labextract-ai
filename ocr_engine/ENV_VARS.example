@@ -1,0 +1,22 @@
+# LabExtract OCR engine - environment variables (copy to your own env / secret store).
+# NAMES ONLY: never commit real values. All are optional; the defaults are what the engine uses when unset.
+
+# --- local engine ---
+# LABOCR_TESSERACT=/usr/bin/tesseract          # default: `tesseract` on PATH
+# LABOCR_PADDLE_REPO=./vendor/paddleocr-hebrew  # default: <package>/vendor/paddleocr-hebrew
+# LABOCR_CACHE=/var/cache/labextract_ocr        # default: <package>/out/cache - OCR token cache (contains page text: keep private)
+# LABOCR_CONTRACTS_REPO=/path/to/labextract_contracts   # only if `shared.contracts` is not already importable
+
+# --- optional Gemini fallback (keep OFF in production) ---
+# LABOCR_GEMINI=off                 # "on" enables the stage
+# LABOCR_GEMINI_DRYRUN=on           # "off" allows real requests
+# LABOCR_GEMINI_TRANSPORT=          # "real" creates the network transport
+# LABOCR_GEMINI_BILLING_CHECKED=no  # "yes" = a human confirmed no billing account / cost
+# LABOCR_GEMINI_MAX_CALLS=0         # hard cap on attempts per run (incl. retries / backup model)
+# LABOCR_GEMINI_PROMOTE=off         # keep off: Gemini values stay candidates
+# LABOCR_GEMINI_MODEL=gemini-3.1-flash-lite
+# LABOCR_GEMINI_BACKUP_MODEL=gemini-3.5-flash-lite   # used only after a 503; "" disables
+# LABOCR_GEMINI_ENV_FILE=           # path of a private env file holding the keys below
+# GEMINI_API_KEY=
+# GEMINI_API_KEY_2=
+# GEMINI_API_KEY_3=

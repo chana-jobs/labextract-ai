@@ -3,3 +3,9 @@ __pycache__/
 .env
 .venv/
 *.egg-info/
+.vercel
+/local_uploads/
+.env.*
+# private specification documents: never published
+/Kiro_Endpoint_Mapping_2026-10-19.md
+/LabExtract_AI_Specification_v3.2_EN.md

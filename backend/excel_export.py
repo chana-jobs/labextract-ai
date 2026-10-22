@@ -16,9 +16,9 @@ from openpyxl.styles import Alignment, Font, PatternFill
 
 from pydantic import BaseModel
 
+from backend.readiness import commitment_status
 from shared.contracts import (
-    CommitmentStatus, ExportCell, Form, IssueReason, ProcessingStatus, derive_commitment_status,
-    export_cell, export_central_cell,
+    CommitmentStatus, ExportCell, Form, IssueReason, ProcessingStatus, export_cell, export_central_cell,
 )
 
 HEADERS = ["שם פרטי", "שם משפחה", "מספר ת״ז", "מספר מרכזי", "תאריך קבלת הדגימה", "גורם שולח", "מספר התחייבות"]
@@ -72,6 +72,7 @@ def build_export(forms: list[Form]) -> tuple[bytes, ExportSummary]:
         c.alignment = Alignment(horizontal="right")
 
     s = ExportSummary()
+    filled_not_ready = 0      # every cell approved, yet the row is not closed (open issue, uncertain existence)
     row = 2
     for form in forms:
         if form.processing_status == ProcessingStatus.FAILED:
@@ -95,9 +96,11 @@ def build_export(forms: list[Form]) -> tuple[bytes, ExportSummary]:
                 orange = sum(1 for c in cells if c.orange)
                 s.orange_cells += orange
                 s.pending_rows += 1 if orange else 0
-                status = derive_commitment_status(exam, com)
+                status = commitment_status(form, exam, com)     # the server's classification, open issues included
                 s.ready += status == CommitmentStatus.READY
                 s.closed_with_gaps += status == CommitmentStatus.READY_WITH_CONFIRMED_GAPS
+                filled_not_ready += not orange and status not in (
+                    CommitmentStatus.READY, CommitmentStatus.READY_WITH_CONFIRMED_GAPS)
                 s.rows += 1
                 row += 1
 
@@ -106,10 +109,13 @@ def build_export(forms: list[Form]) -> tuple[bytes, ExportSummary]:
     for col, w in zip("ABCDEFG", (14, 16, 14, 22, 20, 16, 18)):
         ws.column_dimensions[col].width = w
 
-    s.is_partial = bool(s.orange_cells or s.uncounted_forms or s.failed_forms)
+    s.is_partial = bool(s.orange_cells or s.uncounted_forms or s.failed_forms or filled_not_ready)
     s.filename = "labextract" + ("_חלקי" if s.is_partial else "") + ".xlsx"
     if s.orange_cells:
         s.warnings.append(f"{s.orange_cells} תאים לא מאושרים (ריקים וכתומים) ב-{s.pending_rows} שורות.")
+    if filled_not_ready:
+        s.warnings.append(f"{filled_not_ready} שורות מלאות אך אינן מוכנות: קיימת בעיה פתוחה בטופס או ספק בקיום "
+                          "ההתחייבות. אין להעביר אותן לקליטה לפני סגירת הבעיה.")
     if s.uncounted_forms:
         s.warnings.append(f"{s.uncounted_forms} טפסים שלא ניתן לקבוע בהם כמה התחייבויות יש: ייתכן שחסרות שורות בקובץ.")
     if s.failed_forms:
