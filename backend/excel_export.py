@@ -73,10 +73,14 @@ def build_export(forms: list[Form]) -> tuple[bytes, ExportSummary]:
 
     s = ExportSummary()
     filled_not_ready = 0      # every cell approved, yet the row is not closed (open issue, uncertain existence)
+    queued_forms = 0          # pages not processed yet (page-by-page processing still running)
     row = 2
     for form in forms:
         if form.processing_status == ProcessingStatus.FAILED:
             s.failed_forms += 1
+            continue
+        if form.processing_status in (ProcessingStatus.QUEUED, ProcessingStatus.RUNNING):
+            queued_forms += 1
             continue
         if any(i.reason == IssueReason.COMMITMENT_COUNT_UNCERTAIN for i in form.issues):
             s.uncounted_forms += 1
@@ -109,7 +113,7 @@ def build_export(forms: list[Form]) -> tuple[bytes, ExportSummary]:
     for col, w in zip("ABCDEFG", (14, 16, 14, 22, 20, 16, 18)):
         ws.column_dimensions[col].width = w
 
-    s.is_partial = bool(s.orange_cells or s.uncounted_forms or s.failed_forms or filled_not_ready)
+    s.is_partial = bool(s.orange_cells or s.uncounted_forms or s.failed_forms or filled_not_ready or queued_forms)
     s.filename = "labextract" + ("_חלקי" if s.is_partial else "") + ".xlsx"
     if s.orange_cells:
         s.warnings.append(f"{s.orange_cells} תאים לא מאושרים (ריקים וכתומים) ב-{s.pending_rows} שורות.")
@@ -120,6 +124,8 @@ def build_export(forms: list[Form]) -> tuple[bytes, ExportSummary]:
         s.warnings.append(f"{s.uncounted_forms} טפסים שלא ניתן לקבוע בהם כמה התחייבויות יש: ייתכן שחסרות שורות בקובץ.")
     if s.failed_forms:
         s.warnings.append(f"{s.failed_forms} טפסים נכשלו בעיבוד טכני ולא נכללו בקובץ.")
+    if queued_forms:
+        s.warnings.append(f"{queued_forms} עמודים עדיין לא עובדו ולא נכללו בקובץ.")
     if s.is_partial:
         s.warnings.append("הקובץ אינו מוכן לקליטה אוטומטית עד לאימות מול תבנית המעבדה. כתום הוא סימון חזותי בלבד.")
 

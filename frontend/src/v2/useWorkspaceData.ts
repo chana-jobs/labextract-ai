@@ -11,9 +11,9 @@ import {
   getAuthSessionGeneration,
   getDocument,
   getDrafts,
-  initDrafts,
   isAuthSessionCurrent,
   listDocuments,
+  processDocument,
 } from "../api/client";
 import type { DocumentMeta } from "../types/contracts";
 import type { DocEntry, DocLoad } from "./model";
@@ -79,11 +79,14 @@ export function useWorkspaceData() {
     if (live()) setLoad(fileId, { state: "ready", forms: result.forms ?? [result.form] });
   }, [live, setLoad]);
 
-  /** Explicit user action: start extraction for a pending document. */
+  /** Explicit user action: start (or resume) extraction for a pending document, one page per request. */
   const processDoc = useCallback(async (fileId: string) => {
     setLoad(fileId, { state: "processing" });
     try {
-      await initDrafts(fileId);
+      const current = await getDocument(fileId);
+      await processDocument(fileId, current.page_count ?? 1, (done, total) => {
+        if (live()) setLoad(fileId, { state: "processing", done, total });
+      });
       const [meta, result] = await Promise.all([getDocument(fileId), getDrafts(fileId)]);
       if (live()) setLoad(fileId, { state: "ready", forms: result.forms ?? [result.form] }, meta);
     } catch (err) {

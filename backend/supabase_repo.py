@@ -43,11 +43,12 @@ def _eq(value: str) -> str:
 
 
 class SupabaseRepository:
-    def __init__(self, url: str, service_key: str, bucket: str, http: Http = urllib_http):
+    def __init__(self, url: str, service_key: str, bucket: str, http: Http = urllib_http, anon_key: str | None = None):
         self.url = url.rstrip("/")
         self._key = service_key
         self.bucket = bucket
         self._http = http
+        self._anon_key = anon_key       # public by design; lets the browser through the API gateway, grants nothing
 
     @classmethod
     def from_env(cls) -> "SupabaseRepository":
@@ -56,6 +57,7 @@ class SupabaseRepository:
                 os.environ["SUPABASE_URL"],
                 os.environ["SUPABASE_SERVICE_ROLE_KEY"],
                 os.environ.get("LABEXTRACT_BUCKET", "labextract-originals"),
+                anon_key=os.environ.get("SUPABASE_ANON_KEY"),
             )
         except KeyError as missing:
             raise RuntimeError(f"Missing environment variable {missing}") from None
@@ -103,6 +105,59 @@ class SupabaseRepository:
             # no metadata row: remove the orphan object so nothing unreferenced stays stored
             self._http("DELETE", self._object_url(object_path), self._headers(), None)
             raise
+
+    # -- direct upload: a signed, single-object upload URL; the browser sends the bytes to Storage itself
+    def _staged_path(self, workspace_id, file_id, extension) -> str:
+        return f"{workspace_id}/{validate_file_id(file_id)}{extension}"
+
+    def _sign(self, kind: str, path: str, payload: dict) -> dict:
+        url = f"{self.url}/storage/v1/object/{kind}/{self.bucket}/{urllib.parse.quote(path)}"
+        status, raw = self._http("POST", url, self._headers({"Content-Type": "application/json"}),
+                                 json.dumps(payload).encode("utf-8"))
+        if status >= 300:
+            raise StorageError(f"signing a storage URL failed with HTTP {status}")
+        return json.loads(raw)
+
+    def create_upload_target(self, workspace_id, file_id, extension, content_type):
+        check_content_type(extension, content_type)
+        signed = self._sign("upload/sign", self._staged_path(workspace_id, file_id, extension), {})
+        # the signed URL carries its own short-lived token; the service key never reaches the browser
+        headers = {"Content-Type": content_type, "x-upsert": "false"}
+        if self._anon_key:
+            headers["apikey"] = self._anon_key
+        return {"method": "PUT", "url": f"{self.url}/storage/v1{signed['url']}", "headers": headers}
+
+    def read_staged(self, workspace_id, file_id, extension):
+        if self._document_row(workspace_id, file_id, "file_id") is not None:
+            return None                                       # already registered: not a pending upload
+        path = self._staged_path(workspace_id, file_id, extension)
+        status, content = self._http("GET", self._object_url(path), self._headers(), None)
+        if status == 404 or (status == 400 and b"not_found" in content.lower()):
+            return None
+        if status >= 300:
+            raise StorageError(f"download of the uploaded file failed with HTTP {status}")
+        return content
+
+    def discard_staged(self, workspace_id, file_id, extension):
+        self._http("DELETE", self._object_url(self._staged_path(workspace_id, file_id, extension)),
+                   self._headers(), None)
+
+    def register_document(self, workspace_id, metadata, *, extension, sha256, content_type, size_bytes):
+        check_content_type(extension, content_type)
+        file_id = validate_file_id(metadata["file_id"])
+        self._rest("POST", T_DOCUMENTS, payload={
+            "file_id": file_id, "workspace_id": workspace_id, "metadata": metadata,
+            "extension": extension, "sha256": sha256, "size_bytes": size_bytes,
+            "storage_path": self._staged_path(workspace_id, file_id, extension),
+        })
+
+    def original_link(self, workspace_id, file_id, min_bytes):
+        """A short-lived signed download URL for an original too large for a function response."""
+        row = self._document_row(workspace_id, file_id, "storage_path,size_bytes")
+        if row is None or (row.get("size_bytes") or 0) <= min_bytes:
+            return None
+        signed = self._sign("sign", row["storage_path"], {"expiresIn": 600})
+        return f"{self.url}/storage/v1{signed['signedURL']}"
 
     def _document_row(self, workspace_id, file_id, select: str) -> dict | None:
         rows = self._rest("GET", T_DOCUMENTS, params={
