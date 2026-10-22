@@ -48,6 +48,10 @@ export interface EditableFieldProps {
   onBeforeSave?: (previousValue: string, nextValue: string) => boolean;
   /** Notify the parent when inline editing starts. */
   onEditStart?: () => void;
+  /** Commit when the input loses focus (default). False keeps the draft open until Enter / ✓ / Escape. */
+  commitOnBlur?: boolean;
+  /** Reports whether an open editor holds a draft that differs from the persisted value. */
+  onDirtyChange?: (dirty: boolean) => void;
   /**
    * Called when the user commits a new, different value (Enter or blur).
    * Never called on Escape or when the value is unchanged.
@@ -70,11 +74,22 @@ export default function EditableField({
   showValue = true,
   onBeforeSave,
   onEditStart,
+  commitOnBlur = true,
+  onDirtyChange,
   onSave,
   onCancel,
 }: EditableFieldProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
+  const dirty = editing && draft.trim() !== value.trim();
+
+  // Report only when `dirty` flips (or on unmount); the callback may be a new function every render.
+  const dirtyCallback = useRef(onDirtyChange);
+  dirtyCallback.current = onDirtyChange;
+  useEffect(() => {
+    dirtyCallback.current?.(dirty);
+    return () => { if (dirty) dirtyCallback.current?.(false); };
+  }, [dirty]);
   const inputRef = useRef<HTMLInputElement>(null);
   const wasSaving = useRef(saving);
   const savePending = useRef(false);
@@ -165,7 +180,7 @@ export default function EditableField({
           dir={dir}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={handleKeyDown}
-          onBlur={commit}
+          onBlur={commitOnBlur ? commit : undefined}
           aria-label={`עריכת ${fieldLabel}`}
           aria-describedby={saveError ? errorId : undefined}
           aria-invalid={!!saveError}

@@ -1,0 +1,11 @@
+# LabExtract OCR engine - runtime (Python 3.11; tested on 3.11.9). Local only, no network.
+# System packages (Linux / Debian-Ubuntu): apt-get install -y tesseract-ocr tesseract-ocr-heb tesseract-ocr-osd
+onnxruntime==1.31.0
+opencv-python-headless==5.0.0.93   # dev machine: opencv-python 5.0.0.93 (same build, GUI-less on servers)
+numpy==2.4.6
+pymupdf==1.28.2
+zxing-cpp==3.1.1
+pyclipper==1.4.0
+pillow==12.3.0
+# only for --contract / to_contract.page_to_form (shared.contracts uses pydantic v2)
+pydantic==2.14.1

@@ -1,0 +1,9 @@
+{
+ "_doc": "Documents allowed for REAL Gemini sends: the anonymized dev samples only (part 1, approved 21-22.10). Part 2 (held-out test) and any real patient document are NOT listed.",
+ "sha256": [
+  "f5eab18196a1007c1512a88d9ed6210e8244ec2c25b38faea9f10ae162c021b8"
+ ],
+ "files": [
+  "part 1 dev samples PDF"
+ ]
+}

@@ -1,8 +1,13 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "cd frontend && npm ci && VITE_API_BASE_URL=/api VITE_USE_MOCK=false npm run build && cd .. && rm -rf public && cp -r frontend/dist public && cp public/v2.html public/index.html",
   "functions": {
-    "app.py": {
-      "excludeFiles": "{tests/**,**/test_*.py,**/__pycache__/**}"
+    "api/index.py": {
+      "maxDuration": 60,
+      "excludeFiles": "{tests/**,ocr_engine/**,Dockerfile,frontend/**,public/**,migrations/**,local_uploads/**,**/__pycache__/**,.idea/**,.vscode/**,*.md,.env*,.venv/**,**/node_modules/**}"
     }
-  }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/index" }
+  ]
 }

@@ -1,0 +1,13 @@
+.env
+.env.*
+.venv/
+local_uploads/
+__pycache__/
+.pytest_cache/
+.idea/
+.vscode/
+tests/
+frontend/node_modules/
+frontend/dist/
+public/
+*.md
