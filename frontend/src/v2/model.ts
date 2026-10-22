@@ -124,7 +124,10 @@ export function rowStatus(form: Form, exam: Examination, c: Commitment): RowStat
     // count issue: the form is not closed. Only BLOCKING_ISSUES also block approval (server rule).
     reasons.push(BLOCKING_ISSUES.includes(issue.reason) ? `בעיה חוסמת: ${issueLabel(issue.reason)}` : `הטופס לא נסגר: ${issueLabel(issue.reason)}`);
   }
-  if (c.existence_status === "UNCERTAIN") reasons.push("קיום ההתחייבות אינו ודאי");
+  // a number a person entered and approved from the source confirms the commitment exists (server rule)
+  if (c.existence_status === "UNCERTAIN" && c.number.approval_status !== "HUMAN_APPROVED") {
+    reasons.push(c.number.normalized ? "קיום ההתחייבות אינו ודאי" : "מספר התחייבות לא זוהה — יש להזין מהמקור");
+  }
   if (exam.association_status === "ASSOCIATION_UNCERTAIN") reasons.push("שיוך ההתחייבות לבדיקה אינו ודאי");
 
   if (derived === "FAILED") reasons.unshift("הטופס נכשל בעיבוד");

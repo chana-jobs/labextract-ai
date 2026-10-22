@@ -39,8 +39,10 @@ def commitment_status(form: Form, exam, commitment) -> CommitmentStatus:
         and issue.commitment_id in (None, commitment.commitment_id)
         for issue in form.issues
     )
-    if (open_issue or commitment.existence_status != ExistenceStatus.CONFIRMED
-            or exam.association_status == AssociationStatus.ASSOCIATION_UNCERTAIN):
+    # a number a person entered and approved from the source confirms that the commitment exists
+    existence_open = (commitment.existence_status != ExistenceStatus.CONFIRMED
+                      and commitment.number.approval_status != ApprovalStatus.HUMAN_APPROVED)
+    if open_issue or existence_open or exam.association_status == AssociationStatus.ASSOCIATION_UNCERTAIN:
         return CommitmentStatus.NEEDS_REVIEW
     return status
 
