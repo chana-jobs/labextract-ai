@@ -27,6 +27,7 @@ import {
   cellKey,
   EMPTY_FILTERS,
   excelAvailability,
+  failedPages,
   fieldText,
   latestDoc,
   select,
@@ -317,12 +318,15 @@ export default function ReviewWorkspaceV2() {
     setFilters({ ...EMPTY_FILTERS, scope: "latest_file" });
     setTab("review");
     setPane(null);
-    setNotice({ tone: "info", text: `הקובץ ${meta.filename} הועלה וממתין לעיבוד.` });
+    setNotice({ tone: "info", text: `הקובץ ${meta.filename} הועלה, והעיבוד התחיל.` });
   }, [data, hasUnsavedEdit]);
 
   // ---------------------------------------------------------------- render helpers
 
   const scopeProblems = sel.scopeDocs.filter((d) => d.load.state !== "ready");
+  const failedDocs = sel.scopeDocs
+    .map(({ meta, load }) => ({ meta, pages: load.state === "ready" ? failedPages(load.forms) : [] }))
+    .filter((d) => d.pages.length > 0);
   const excelReason = !excel.ok
     ? excel.reason
     : excelCheck.state === "checking" ? "בודק מול השרת…"
@@ -411,6 +415,28 @@ export default function ReviewWorkspaceV2() {
               )}
             </li>
           ))}
+        </ul>
+      )}
+
+      {failedDocs.length > 0 && (
+        <ul className="v2-docstates" aria-label="עמודים שעיבודם נכשל">
+          {failedDocs.map(({ meta, pages }) => (
+            <li key={meta.file_id} className="v2-docstate v2-docstate--error">
+              <span dir="auto" className="v2-docstate__name">{meta.filename}</span>
+              <span className="v2-docstate__state">
+                {pages.length === 1 ? `עמוד ${pages[0]} נכשל בעיבוד` : `${pages.length} עמודים נכשלו בעיבוד`}
+              </span>
+              <button type="button" className="btn btn--secondary btn--sm" onClick={() => void data.retryFailed(meta.file_id, pages)}>נסי שוב</button>
+            </li>
+          ))}
+          {failedDocs.length > 1 && (
+            <li className="v2-docstate">
+              <button type="button" className="btn btn--teal btn--sm"
+                onClick={() => void data.retryAllFailed(failedDocs.map(({ meta, pages }) => ({ fileId: meta.file_id, pages })))}>
+                נסי שוב את כל הנכשלים
+              </button>
+            </li>
+          )}
         </ul>
       )}
 

@@ -1,7 +1,7 @@
 /**
  * Loads every document of the workspace and its drafts through the existing API.
- * QUEUED/RUNNING documents are NOT processed automatically: they stay "pending"
- * until the user explicitly starts processing (POST drafts/init).
+ * A file uploaded in this session is processed at once, page by page. Documents that were already
+ * QUEUED/RUNNING when the list loaded stay "pending" until the user explicitly starts (or resumes) them.
  * One document failing never hides the others.
  */
 
@@ -14,6 +14,7 @@ import {
   isAuthSessionCurrent,
   listDocuments,
   processDocument,
+  retryPages,
 } from "../api/client";
 import type { DocumentMeta } from "../types/contracts";
 import type { DocEntry, DocLoad } from "./model";
@@ -94,10 +95,33 @@ export function useWorkspaceData() {
     }
   }, [live, setLoad]);
 
-  const addDoc = useCallback((meta: DocumentMeta) => {
-    setDocs((prev) => [{ meta, load: { state: "loading" } }, ...prev.filter((d) => d.meta.file_id !== meta.file_id)]);
-    void fetchDoc(meta);
-  }, [fetchDoc]);
+  /** Explicit user action: re-process the pages (1-based) of one document whose processing failed. */
+  const retryFailed = useCallback(async (fileId: string, pages: number[]) => {
+    setLoad(fileId, { state: "processing", done: 0, total: pages.length });
+    try {
+      await retryPages(fileId, pages, (done, total) => {
+        if (live()) setLoad(fileId, { state: "processing", done, total });
+      });
+      const [meta, result] = await Promise.all([getDocument(fileId), getDrafts(fileId)]);
+      if (live()) setLoad(fileId, { state: "ready", forms: result.forms ?? [result.form] }, meta);
+    } catch (err) {
+      if (live() && !isAbort(err)) setLoad(fileId, { state: "error", message: errorMessage(err) });
+    }
+  }, [live, setLoad]);
 
-  return { list, docs, reload, refreshDoc, processDoc, addDoc, live };
+  /** "Retry all failed": one document after the other; a document that fails again never stops the others. */
+  const retryAllFailed = useCallback(async (items: { fileId: string; pages: number[] }[]) => {
+    for (const item of items) {
+      if (!live()) return;
+      await retryFailed(item.fileId, item.pages);
+    }
+  }, [live, retryFailed]);
+
+  /** A file the user just uploaded is processed at once (upload -> observable processing -> review). */
+  const addDoc = useCallback((meta: DocumentMeta) => {
+    setDocs((prev) => [{ meta, load: { state: "processing" } }, ...prev.filter((d) => d.meta.file_id !== meta.file_id)]);
+    void processDoc(meta.file_id);
+  }, [processDoc]);
+
+  return { list, docs, reload, refreshDoc, processDoc, retryFailed, retryAllFailed, addDoc, live };
 }

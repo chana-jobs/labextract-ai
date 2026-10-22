@@ -253,6 +253,20 @@ export async function initDrafts(fileId: string): Promise<void> {
   return request("POST", `/documents/${fileId}/drafts/init`);
 }
 
+/** Re-process pages (1-based) whose processing FAILED: POST /documents/:fileId/drafts/pages/:n?retry=true. */
+export async function retryPages(
+  fileId: string,
+  pages: number[],
+  onProgress?: (done: number, total: number) => void
+): Promise<void> {
+  if (USE_MOCK) return;
+  for (let i = 0; i < pages.length; i += 1) {
+    onProgress?.(i, pages.length);
+    await request("POST", `/documents/${fileId}/drafts/pages/${pages[i]}?retry=true`);
+  }
+  onProgress?.(pages.length, pages.length);
+}
+
 /**
  * Extract a document page by page: POST /documents/:fileId/drafts/pages/:n, one request per page, so a long
  * document never exceeds the function time limit. Pages already processed return at once, so calling it again
