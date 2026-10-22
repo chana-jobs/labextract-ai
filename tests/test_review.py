@@ -149,6 +149,20 @@ def test_evidence_without_raw_value_blocks_the_change(storage):
     assert detail["status"] == "BLOCKED_CONTRACT_CHANGE"
 
 
+def test_field_with_only_review_regions_can_be_filled(storage):
+    """A handwritten field the OCR engine located but could not read: its evidence is a review region only (a place
+    to look, no reading), so there is no extracted value to preserve and a person's value is saved."""
+    form = _default_form()
+    region = Evidence(page=0, bbox=[10, 10, 120, 40], method=review.REVIEW_REGION_METHOD,
+                      engine_version="lab-ocr-1.0", role_basis="handwritten value region")
+    form.examinations[0].sender = form.examinations[0].sender.model_copy(update={"evidence": [region]})
+    _write(storage, form)
+    r = client.put(URL, json=_body(sender="כללית"))
+    assert r.status_code == 200
+    fv = _exam(r).sender
+    assert fv.normalized == "כללית" and fv.approval_status == ApprovalStatus.PENDING
+
+
 # ---- IF-2: partial values are saved, never approved ------------------------------------
 def test_value_with_question_mark_is_saved_as_partial(storage):
     _write(storage, _default_form())
