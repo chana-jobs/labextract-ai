@@ -7,6 +7,9 @@ __pycache__/
 .idea/
 .vscode/
 tests/
+# the container (Dockerfile.vercel) serves /api itself; without this, Vercel also builds api/index.py as a separate
+# Python function (no OCR) that takes over /api requests
+/api/
 frontend/node_modules/
 frontend/dist/
 public/
