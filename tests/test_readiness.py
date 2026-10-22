@@ -208,3 +208,8 @@ def test_form_without_an_identified_commitment_number_is_a_row_to_review(repo):
     assert number.normalized == "000730001" and number.approval_status == ApprovalStatus.HUMAN_APPROVED
     # the count of commitments on the form is still unconfirmed: the row stays in review until it is confirmed
     assert _status(stored) == CommitmentStatus.NEEDS_REVIEW
+    # the reviewer confirms the count (the V2 "confirm commitment count" button): the issue is closed
+    assert client.put(f"/review/{file_id}/{form['form_id']}", json={"commitment_count_confirmed": True}).status_code == 200
+    stored = Form.model_validate(client.get(f"/documents/{file_id}/drafts").json()[0])
+    assert not any(i.reason == IssueReason.COMMITMENT_COUNT_UNCERTAIN for i in stored.issues)
+    assert stored.examinations[0].commitments[0].number.normalized == "000730001"     # nothing else changed
