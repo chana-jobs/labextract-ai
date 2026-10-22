@@ -33,6 +33,8 @@ SHARED_FIELDS = (
 
 FORMAT_INVALID = "FORMAT_INVALID"
 ID_CHECKSUM_WARNING = "ID_CHECKSUM_WARNING"
+# Evidence.method of a location the OCR engine marks for the reviewer (ocr_engine/labextract_ocr/to_contract.py)
+REVIEW_REGION_METHOD = "review_region"
 
 # Open issues that block approval (Spec v3.2 7.6). A form-level one (no commitment_id) blocks the
 # whole form; one linked to a commitment blocks that row. The commitment count issue blocks form
@@ -184,7 +186,10 @@ def _rebuild(old: FieldValue, value: str, path: str, blockers: list) -> FieldVal
     its original evidence, so the evidence stays attached to the value it supports.
     """
     candidates = list(old.candidates)
-    if old.evidence or old.dimensions is not None:
+    # A review region ("review_region") is a place to look, not a reading: a field that has ONLY regions and no raw
+    # value (e.g. a handwritten name / ID the engine located but could not read) has no extracted value to preserve.
+    only_regions = old.raw is None and old.evidence and all(e.method == REVIEW_REGION_METHOD for e in old.evidence)
+    if (old.evidence or old.dimensions is not None) and not only_regions:
         if old.raw is None:
             if old.evidence:
                 # Candidate.raw is required: the evidence cannot be kept with its value.
