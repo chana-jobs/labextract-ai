@@ -1,7 +1,8 @@
 /**
  * Commitment grid: seven fields in spec order (rightmost first in RTL), text
  * statuses (never colour alone). Editing reuses EditableField and is enabled
- * only where the active view allows it; persistence happens in the parent.
+ * only where the active view allows it, and only for cells that are not certain
+ * (isCertain); persistence happens in the parent.
  */
 
 import EditableField from "../../components/EditableField";
@@ -46,8 +47,26 @@ interface CommitmentGridProps {
   onDirty: (key: CellKey, dirty: boolean) => void;
 }
 
+/**
+ * A cell is editable only when its value is not certain: empty, missing, unread, conflicting, partial, carrying an
+ * uncertainty reason or an invalid format, or with candidates that disagree. Approved / confirmed-absent values and
+ * complete extractions with no doubt are locked (white, read-only); approval stays in the side panel.
+ */
+export function isCertain(fv: FieldValue): boolean {
+  if (fv.approval_status === "AUTO_APPROVED" || fv.approval_status === "HUMAN_APPROVED") return !!fv.normalized;
+  if (fv.approval_status === "CONFIRMED_ABSENT") return true;
+  return (
+    fv.extraction_status === "COMPLETE"
+    && !!fv.normalized
+    && !fv.partial
+    && fv.uncertainty_reason.length === 0
+    && !fv.flags.includes("FORMAT_INVALID")
+    && fv.candidates.every((c) => (c.normalized ?? c.raw) === fv.normalized)
+  );
+}
+
 /** `empty` = what an empty cell says: unread or conflicting text is never shown as a plain missing value. */
-function cellState(fv: FieldValue): { label: string; tone: "ok" | "pending" | "missing" | "absent"; empty: string } {
+function cellState(fv: FieldValue): { label: string; tone: "ok" | "pending" | "missing" | "absent" | "locked"; empty: string } {
   if (fv.approval_status === "CONFIRMED_ABSENT") return { label: "חסר במקור (אושר)", tone: "absent", empty: "—" };
   if (fv.approval_status === "AUTO_APPROVED") return { label: "אומת אוטומטית", tone: "ok", empty: "—" };
   if (fv.approval_status === "HUMAN_APPROVED") return { label: "אושר ידנית", tone: "ok", empty: "—" };
@@ -55,6 +74,7 @@ function cellState(fv: FieldValue): { label: string; tone: "ok" | "pending" | "m
   if (fv.extraction_status === "CONFLICT") return { label: "סתירה בין קריאות", tone: "pending", empty: "סתירה" };
   if (fv.partial) return { label: "ערך חלקי", tone: "pending", empty: "חלקי" };
   if (fv.extraction_status === "UNCERTAIN") return { label: "קריאה לא ודאית", tone: "pending", empty: "לא קריא" };
+  if (isCertain(fv)) return { label: "חולץ בוודאות · ממתין לאישור · נעול לעריכה", tone: "locked", empty: "—" };
   return { label: "ממתין לאישור", tone: "pending", empty: "חסר" };
 }
 
@@ -110,7 +130,7 @@ export default function CommitmentGrid(props: CommitmentGridProps) {
           {fv.flags.length > 0 && <span className="v2-cell__flag" aria-hidden="true">!</span>}
         </button>
         <span className="v2-sr">{state.label}</span>
-        {allowEditing && fv.approval_status !== "CONFIRMED_ABSENT" && (
+        {allowEditing && !isCertain(fv) && (
           <EditableField
             fieldLabel={label}
             value={value}
