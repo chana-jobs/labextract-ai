@@ -253,6 +253,15 @@ export async function initDrafts(fileId: string): Promise<void> {
   return request("POST", `/documents/${fileId}/drafts/init`);
 }
 
+/**
+ * The reviewer confirms, after checking the source, that the form's commitments are all in the grid:
+ * PUT /review/:fileId/:formId { commitment_count_confirmed: true } closes COMMITMENT_COUNT_UNCERTAIN.
+ */
+export async function confirmCommitmentCount(fileId: string, formId: string): Promise<void> {
+  if (USE_MOCK) return;
+  await request("PUT", `/review/${fileId}/${formId}`, { commitment_count_confirmed: true });
+}
+
 /** Re-process pages (1-based) whose processing FAILED: POST /documents/:fileId/drafts/pages/:n?retry=true. */
 export async function retryPages(
   fileId: string,

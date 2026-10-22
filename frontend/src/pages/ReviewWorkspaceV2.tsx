@@ -11,7 +11,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, approveField, downloadExcel, getExportSummary, saveField } from "../api/client";
+import { ApiError, approveField, confirmCommitmentCount, downloadExcel, getExportSummary, saveField } from "../api/client";
 import type { ExportSummary, FieldName } from "../types/contracts";
 import SourceViewer, { type FieldApproveRequest } from "../components/SourceViewer";
 import UploadModal from "../components/UploadModal";
@@ -457,6 +457,12 @@ export default function ReviewWorkspaceV2() {
               forms={sel.forms}
               selectedKey={pane?.kind === "forms" ? sourceForms[pane.index]?.key ?? null : null}
               onOpen={(index) => setPane({ kind: "forms", index })}
+              onConfirmCount={(record) => {
+                void confirmCommitmentCount(record.doc.file_id, record.form.form_id)
+                  .then(() => data.refreshDoc(record.doc.file_id))
+                  .then(() => { if (live()) setNotice({ tone: "info", text: "מספר ההתחייבויות בטופס אושר." }); })
+                  .catch((err) => { if (live()) setNotice({ tone: "error", text: `אישור מספר ההתחייבויות נכשל: ${errorMessage(err)}` }); });
+              }}
             />
           ) : (
             <CommitmentGrid

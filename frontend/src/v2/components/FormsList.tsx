@@ -4,9 +4,14 @@ interface FormsListProps {
   forms: FormRecord[];
   selectedKey: string | null;
   onOpen: (index: number) => void;
+  onConfirmCount: (record: FormRecord) => void;
 }
 
-export default function FormsList({ forms, selectedKey, onOpen }: FormsListProps) {
+function countUncertain(record: FormRecord): boolean {
+  return record.form.issues.some((i) => i.reason === "COMMITMENT_COUNT_UNCERTAIN" && i.resolution_state !== "CLOSED");
+}
+
+export default function FormsList({ forms, selectedKey, onOpen, onConfirmCount }: FormsListProps) {
   if (forms.length === 0) {
     return (
       <div className="v2-empty" role="status">
@@ -39,9 +44,12 @@ export default function FormsList({ forms, selectedKey, onOpen }: FormsListProps
                 <td><ul className="v2-reasons">{record.reasons.map((r) => <li key={r}>{r}</li>)}</ul></td>
                 <td>
                   <button type="button" className="btn btn--secondary btn--sm" onClick={() => onOpen(index)}>צפייה במקור</button>
-                  <button type="button" className="btn btn--ghost btn--sm" disabled title="פתרון בעיית טופס דורש endpoint בשרת (Backend).">
-                    פתרון בעיה <span className="v2-dep">Backend</span>
-                  </button>
+                  {countUncertain(record) && (
+                    <button type="button" className="btn btn--teal btn--sm" onClick={() => onConfirmCount(record)}
+                      title="אישור שכל ההתחייבויות שבטופס מופיעות בטבלה (אחרי בדיקה מול המקור)">
+                      אשר מספר התחייבויות
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}
