@@ -20,6 +20,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -91,13 +92,17 @@ def ocr_pages(file_id: str, content: bytes, extension: str, pages: list[int]) ->
     except OcrUnavailable:
         return {p: _failed_form(file_id, p, "OCR is not available on this server; enter values from the source")
                 for p in pages}
+    t_wait = time.monotonic()
     with _lock, tempfile.TemporaryDirectory(prefix="labextract_ocr_job_") as job:
+        t_ocr = time.monotonic()
         path = Path(job) / f"document{extension}"
         path.write_bytes(content)
         try:
             result = engine.extract_file(path, [p + 1 for p in pages] if extension == ".pdf" else None)
         finally:
             _clear(cache)
+        print(f"[ocr] pages={[p + 1 for p in pages]} waited_for_lock={t_ocr - t_wait:.1f}s "
+              f"ocr={time.monotonic() - t_ocr:.1f}s", flush=True)
     forms = {}
     for page in result["pages"]:
         form = page_to_form(file_id, page, result["engine_version"])
