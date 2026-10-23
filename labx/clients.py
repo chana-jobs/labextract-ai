@@ -35,25 +35,31 @@ def _env():
 
 
 ENV = _env()
+def _clean(value):
+    """Keys pasted through some shells arrive with a BOM / zero-width / whitespace around them; an HTTP header
+    must be plain ASCII, so such a key fails every call. Keep only the visible ASCII characters."""
+    return "".join(ch for ch in (value or "") if 33 <= ord(ch) <= 126)
+
+
 def _gemini_keys():
     """GEMINI_API_KEY, GEMINI_API_KEY_2, _3, _4 ... (any number), duplicates removed, in order.
     LABX_EXCLUDE_KEYS="GEMINI_API_KEY_8,..." keeps keys out of this process (e.g. reserved for a live demo)."""
     import re
     excluded = {x.strip() for x in os.environ.get("LABX_EXCLUDE_KEYS", "").split(",") if x.strip()}
-    reserved_values = {(ENV.get(k) or "").strip() for k in excluded}
+    reserved_values = {_clean(ENV.get(k)) for k in excluded}
     names = sorted((k for k in ENV if re.fullmatch(r"GEMINI_API_KEY(_\d+)?", k) and k not in excluded
-                    and (ENV.get(k) or "").strip() not in reserved_values),
+                    and _clean(ENV.get(k)) not in reserved_values),
                    key=lambda k: int(k.rsplit("_", 1)[1]) if k[-1].isdigit() else 1)
     keys = []
     for k in names:
-        v = (ENV[k] or "").strip()
+        v = _clean(ENV[k])
         if v and v not in keys:
             keys.append(v)
     return keys
 
 
 GEMINI_KEYS = _gemini_keys()
-OPENROUTER_KEY = ENV.get("OPENROUTER_API_KEY")
+OPENROUTER_KEY = _clean(ENV.get("OPENROUTER_API_KEY")) or None
 
 
 GEMINI_TIMEOUT_MS = int(os.environ.get("LABX_GEMINI_TIMEOUT_MS", "120000"))
