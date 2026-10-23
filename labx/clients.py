@@ -79,12 +79,24 @@ def _cache_path(model, prompt, image_bytes, extra=""):
     return CACHE_DIR / f"{h.hexdigest()[:32]}.json"
 
 
+_CLIENTS = {}
+
+
+def _client(key_index):
+    """One client per key for the whole process: a new client per call leaks its connection pool (memory grew
+    page after page until the server was killed)."""
+    if key_index not in _CLIENTS:
+        from google import genai
+        from google.genai import types
+        _CLIENTS[key_index] = genai.Client(api_key=GEMINI_KEYS[key_index],
+                                           http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS))
+    return _CLIENTS[key_index]
+
+
 def _gemini_call(model, prompt, image_bytes, schema, key_index):
-    from google import genai
     from google.genai import types
 
-    client = genai.Client(api_key=GEMINI_KEYS[key_index],
-                          http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS))
+    client = _client(key_index)
     cfg = dict(response_mime_type="application/json", temperature=0)
     if schema:
         cfg["response_json_schema"] = schema

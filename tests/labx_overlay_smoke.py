@@ -23,3 +23,8 @@ for name in ("first_name", "last_name", "israeli_id", "sample_received_date", "s
     fv = getattr(exam, name)
     cands = [c.raw for c in fv.candidates][:4]
     print(f"{name:22s} {fv.extraction_status.value:10s} {fv.approval_status.value:8s} {fv.normalized!s:12s} {cands}")
+for c in exam.commitments:
+    print(f"{'commitment':22s} {c.number.extraction_status.value:10s} existence={c.existence_status.value} {c.number.normalized}")
+for fv in exam.central_numbers:
+    print(f"{'central_number':22s} {fv.extraction_status.value:10s} {fv.normalized}")
+print("issues:", [i.reason.value for i in form.issues])
