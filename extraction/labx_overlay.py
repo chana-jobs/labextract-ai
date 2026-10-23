@@ -13,6 +13,7 @@ The labx package is loaded from LABX_DIR (default C:\\accthon_chani\\AI).
 """
 from __future__ import annotations
 
+import gc
 import logging
 import os
 import sys
@@ -89,7 +90,8 @@ def _merge(old: FieldValue, field: str, entry: dict, page0: int, auto: bool) -> 
                                   "candidates": list(old.candidates) + cands})
 
 
-_pool = ThreadPoolExecutor(max_workers=int(os.environ.get("LABX_WORKERS", "2")), thread_name_prefix="labx")
+# one labx page at a time per server: it already runs next to the OCR, and two of each exhausted the memory
+_pool = ThreadPoolExecutor(max_workers=int(os.environ.get("LABX_WORKERS", "1")), thread_name_prefix="labx")
 
 
 def _report(page0: int, seconds: float, res: dict | None, error: str | None = None) -> None:
@@ -111,6 +113,10 @@ def _run(content: bytes, extension: str, page0: int):
     except Exception as exc:              # never break the upload because of the extra layer
         _report(page0, time.monotonic() - t0, None, f"{type(exc).__name__}: {str(exc)[:300]}")
         return None
+    finally:
+        gc.collect()                      # page images and OpenCV buffers: give the memory back before the next page
+    res = {"fields": res["fields"], "rotated": res.get("rotated"),
+           "log": {"page_reads": res.get("log", {}).get("page_reads", {})}}   # keep only what the merge / log need
     _report(page0, time.monotonic() - t0, res)
     return res
 
