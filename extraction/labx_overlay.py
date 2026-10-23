@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from functools import lru_cache
 from pathlib import Path
@@ -91,12 +92,27 @@ def _merge(old: FieldValue, field: str, entry: dict, page0: int, auto: bool) -> 
 _pool = ThreadPoolExecutor(max_workers=int(os.environ.get("LABX_WORKERS", "2")), thread_name_prefix="labx")
 
 
+def _report(page0: int, seconds: float, res: dict | None, error: str | None = None) -> None:
+    """One log line per page: timing, field statuses and reader errors. Never field values (patient data)."""
+    if res is None:
+        print(f"[labx] page={page0 + 1} FAILED after {seconds:.1f}s: {error}", flush=True)
+        return
+    statuses = {f: e["status"] for f, e in res["fields"].items()}
+    reads = res.get("log", {}).get("page_reads", {})
+    errors = {m.split(":")[-1]: r["_error"][:160] for m, r in reads.items() if isinstance(r, dict) and "_error" in r}
+    print(f"[labx] page={page0 + 1} {seconds:.1f}s rotated={res.get('rotated')} fields={statuses} "
+          f"readers={[m.split(':')[-1] for m in reads]} errors={errors}", flush=True)
+
+
 def _run(content: bytes, extension: str, page0: int):
+    t0 = time.monotonic()
     try:
-        return _labx().extract_bytes(content, extension, page0)
+        res = _labx().extract_bytes(content, extension, page0)
     except Exception as exc:              # never break the upload because of the extra layer
-        log.warning("labx failed on page %s: %s", page0, str(exc)[:200])
+        _report(page0, time.monotonic() - t0, None, f"{type(exc).__name__}: {str(exc)[:300]}")
         return None
+    _report(page0, time.monotonic() - t0, res)
+    return res
 
 
 def start(content: bytes, extension: str, page0: int) -> Future | None:
