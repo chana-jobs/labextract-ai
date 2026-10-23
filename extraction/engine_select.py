@@ -23,7 +23,7 @@ import threading
 from functools import lru_cache
 from pathlib import Path
 
-from extraction import pdf_text
+from extraction import labx_overlay, pdf_text
 from shared.contracts import Form, Issue, IssueReason, ProcessingStatus, SplitStatus
 
 ENGINES = ("pdf_text", "hybrid", "ocr")
@@ -123,12 +123,16 @@ def page_count(content: bytes, extension: str) -> int:
 
 def extract_page(file_id: str, content: bytes, extension: str, page: int) -> Form:
     """The form of ONE 0-based page, with the same engine rules as extract_document. One page of OCR fits one
-    request, whatever the length of the document."""
+    request, whatever the length of the document. With LABEXTRACT_LABX=on the multi-model consensus layer then
+    reads the four patient fields (extraction/labx_overlay.py); on a scanned page it runs in parallel with the
+    local OCR, so the page takes about as long as the slower of the two instead of both added up."""
     if not 0 <= page < page_count(content, extension):
         raise IndexError(page)
     mode = engine_mode()
     if mode == "ocr":
-        return ocr_pages(file_id, content, extension, [page])[page]
+        pending = labx_overlay.start(content, extension, page)
+        return labx_overlay.apply(content, extension, page, ocr_pages(file_id, content, extension, [page])[page],
+                                  pending)
     if extension == ".pdf":
         import pymupdf
         with pymupdf.open(stream=content, filetype="pdf") as document:
@@ -136,12 +140,19 @@ def extract_page(file_id: str, content: bytes, extension: str, page: int) -> For
     else:
         [form] = pdf_text.extract_document(file_id, content, extension)
     if mode == "hybrid" and _needs_ocr(form):
-        return ocr_pages(file_id, content, extension, [page])[page]
-    return form
+        pending = labx_overlay.start(content, extension, page)
+        return labx_overlay.apply(content, extension, page, ocr_pages(file_id, content, extension, [page])[page],
+                                  pending)
+    return labx_overlay.apply(content, extension, page, form)
 
 
 def extract_document(file_id: str, content: bytes, extension: str) -> list[Form]:
     """One form per page, as pdf_text.extract_document; the engine is chosen by LABEXTRACT_ENGINE."""
+    forms = _extract_document(file_id, content, extension)
+    return [labx_overlay.apply(content, extension, p, form) for p, form in enumerate(forms)]
+
+
+def _extract_document(file_id: str, content: bytes, extension: str) -> list[Form]:
     mode = engine_mode()
     if mode == "pdf_text":
         return pdf_text.extract_document(file_id, content, extension)
