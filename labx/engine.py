@@ -186,7 +186,22 @@ def decide_field(field, votes, form_dates, min_agree=MIN_AGREE, today=None):
     return entry
 
 
-def extract_page(jpeg, readers=None, min_agree=MIN_AGREE, use_zoom=True, date_zoom=False):
+def _confirm_date(entry, crop):
+    """A date read on the whole page is accepted only when the zoomed stamp confirms it: located, and every zoom
+    reading "clear" and equal. Measured on part 1: a faded stamp read "20" instead of "26" by two models as clear on
+    the page came back "unsure" on the zoom (7 correct + 1 wrong -> 5 correct + 0 wrong). Veto only, never a value."""
+    if entry["status"] != "accepted":
+        return entry
+    if not crop:
+        return dict(entry, value=None, status="review", reason="zoom did not locate the stamp to confirm the date")
+    if any(v["legibility"] != "clear" for v in crop):
+        return dict(entry, value=None, status="review", reason="zoomed stamp is not clear")
+    if any(v["value"] != entry["value"] for v in crop):
+        return dict(entry, value=None, status="review", reason="zoomed stamp reads a different date")
+    return entry
+
+
+def extract_page(jpeg, readers=None, min_agree=MIN_AGREE, use_zoom=True, date_zoom=True):
     slots = _slots(readers)
     reads = _ask_all(slots, PROMPT, jpeg, SCHEMA)
     votes, form_dates = page_votes(reads)
@@ -200,15 +215,20 @@ def extract_page(jpeg, readers=None, min_agree=MIN_AGREE, use_zoom=True, date_zo
         regs = hand.read_regions(jpeg, slots)
         log["hand_regions"] = regs
         votes += hand_votes(regs)
-    if use_zoom and date_zoom and "received_date" in pending:
+        fields = {f: decide_field(f, votes, form_dates, min_agree) for f in FIELDS}
+    # the stamp zoom is a veto only (on part 1 it also read a wrong year as "clear"): it runs when the page accepted
+    # a date, and its readings are never counted as votes for a value
+    zoom_date = use_zoom and date_zoom and fields["received_date"]["status"] == "accepted"
+    crop = []
+    if zoom_date:
         boxes = zoom.locate(jpeg, slots)
         log["boxes"] = boxes
         if "received_date" in boxes:
             r = zoom.read_region(zoom.crop(jpeg, boxes["received_date"]), "received_date", slots)
             log["date_crop_reads"] = r
-            votes += crop_votes("received_date", r)
-    if use_zoom and pending:
-        fields = {f: decide_field(f, votes, form_dates, min_agree) for f in FIELDS}
+            crop = crop_votes("received_date", r)
+    if zoom_date:
+        fields["received_date"] = _confirm_date(fields["received_date"], crop)
     return {"fields": fields, "log": log}
 
 
@@ -223,7 +243,7 @@ def extract_bytes(content, extension, page0, readers=None):
     return res
 
 
-def extract_file(path, readers=None, pages=None, min_agree=MIN_AGREE, use_zoom=True, date_zoom=False):
+def extract_file(path, readers=None, pages=None, min_agree=MIN_AGREE, use_zoom=True, date_zoom=True):
     out = []
     for n, jpeg in render.pages(path, only=pages):
         jpeg, deg = orient.upright(jpeg)
