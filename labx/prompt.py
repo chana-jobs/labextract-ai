@@ -25,11 +25,19 @@ RECEIVED DATE (the date the lab received the sample):
 OTHER: form_dates = every other printed date on the page that is an issue / print / visit / sample date
 (exclude birth dates and "valid until" dates), as dd/mm/yyyy.
 
+VISION ONLY: read only the characters physically present in THIS image. It is strictly forbidden to use any other
+source: memory, saved personal information, previous conversations, previously sent images or forms, names or ID numbers
+you recognized before (even if this form looks similar), or general knowledge of common names. Every image is a new,
+independent request - if a value is not visible in this image, it does not exist for you.
+
 ABSOLUTE RULES:
 - Never guess or complete. If you cannot read a value with certainty, return "" for it.
+- If most of a value is readable and only a single character is not, write "?" in place of that character (e.g.
+  "כה?ן") and set its legibility to "unsure". Never replace an unreadable character with a likely one.
 - legibility per field: "clear" ONLY if every single character is unambiguous to you; "unsure" if any character is a
-  guess; "none" if the field is absent or unreadable (then the value is "").
+  guess or a "?"; "none" if the field is absent or unreadable (then the value is "").
 - Do not use outside knowledge of typical names; transcribe only what is written.
+- Do not fix or complete ID digits, even if the number does not look valid.
 """
 
 _FIELD = {"type": "string"}

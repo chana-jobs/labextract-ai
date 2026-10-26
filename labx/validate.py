@@ -32,6 +32,8 @@ def norm_id(raw):
     digits = norm_digits(raw)
     if raw and re.search(r"[A-Za-zא-ת]", raw):
         return None  # letters mixed in: not a clean ID reading
+    if raw and "?" in raw:
+        return None  # an unreadable digit: never drop it and compare the rest
     core = digits.lstrip("0")
     if not (5 <= len(core) <= 9):
         return None
