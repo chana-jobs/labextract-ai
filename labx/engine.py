@@ -149,6 +149,7 @@ def decide_field(field, votes, form_dates, min_agree=MIN_AGREE, today=None):
         entry["reason"] = "not found"
         return entry
     distinct = {v["value"] for v in vs}
+    entry["readings"] = sorted(v for v in distinct if v)    # valid normalized readings, for the reviewer
     clear_models = {v["model"] for v in vs if v["legibility"] == "clear" and v["value"]}
     if len(distinct) > 1 or None in distinct:
         entry.update(status="review", reason="readings disagree or invalid")
@@ -159,7 +160,8 @@ def decide_field(field, votes, form_dates, min_agree=MIN_AGREE, today=None):
     value = vs[0]["value"]
     if field in ("first_name", "last_name") and not ACCEPT_NAMES:
         # measured on the dev set: two different models agreed on the same INVENTED name (0 correct, 2 wrong)
-        entry.update(status="review", reason="names always go to human review (models invent names)")
+        # the agreed value is offered as a proposal; a person approves or corrects it
+        entry.update(status="review", reason="names always go to human review (models invent names)", proposed=value)
         return entry
     if field == "received_date":
         ok, why = validate.date_plausible(dt.date.fromisoformat(value), form_dates, today)

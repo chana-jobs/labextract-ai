@@ -4,8 +4,9 @@ Enabled with LABEXTRACT_LABX=on. Runs after the page engine (pdf_text / OCR) and
   * labx ACCEPTED a value (two different vision models read it "clear" and agree, code validators pass):
       - the page engine has no complete value, or the same value  -> COMPLETE with the labx value
       - the page engine has a DIFFERENT complete value             -> CONFLICT with both candidates (a human decides)
-  * labx did not accept: the page engine's field is kept; for ID / date the model readings are added as candidates
-    (names are not, because the models invent names on unclear handwriting).
+  * labx did not accept: the page engine's field is kept; for ID / date the model readings are added as candidates.
+    Names are never accepted (the models invent names on unclear handwriting): when both models agree, the name is
+    pre-filled as UNCERTAIN for a person to approve or correct; when they disagree, each reading is a candidate.
 Approval stays PENDING (verification NONE) unless LABX_AUTO_APPROVE=1, which reports verification AGREEMENT so the
 server's auto-approval policy (backend/readiness.py) may approve it.
 If labx fails (no key, quota, network), the form is returned unchanged.
@@ -68,6 +69,21 @@ def _accepted(name, field, entry, page0, auto) -> FieldValue:
                       evidence=[_evidence(page0, note)])
 
 
+def _name_proposal(old: FieldValue, entry: dict, page0: int) -> FieldValue:
+    """A name labx did not accept. Both models agreed: the value is pre-filled as UNCERTAIN (never auto-approved, a
+    person approves or corrects it). They disagreed: each valid reading is offered as a candidate, no value."""
+    proposed, readings = entry.get("proposed"), entry.get("readings") or []
+    if not proposed and not readings:
+        return old
+    note = f"labx: {entry['reason']} ({'; '.join(entry['candidates'])})"
+    cands = [Candidate(raw=v, normalized=v, role_basis=note[:500], evidence=[_evidence(page0, note)])
+             for v in ([proposed] if proposed else readings)]
+    return FieldValue(field_name=old.field_name, raw=proposed, normalized=proposed,
+                      extraction_status=ExtractionStatus.UNCERTAIN, uncertainty_reason=[UncertaintyReason.RECOGNITION],
+                      flags=["labx_name_proposal" if proposed else "labx_name_readings_disagree"],
+                      candidates=list(old.candidates) + cands, evidence=list(old.evidence) + [_evidence(page0, note)])
+
+
 def _merge(old: FieldValue, field: str, entry: dict, page0: int, auto: bool) -> FieldValue:
     name = old.field_name
     if entry["status"] == "accepted":
@@ -79,7 +95,11 @@ def _merge(old: FieldValue, field: str, entry: dict, page0: int, auto: bool) -> 
                               evidence=list(old.evidence) + list(new.evidence),
                               flags=["labx_disagrees_with_page_engine"])
         return new
-    if old.extraction_status == ExtractionStatus.COMPLETE or field in ("first_name", "last_name") or not entry["candidates"]:
+    if old.extraction_status == ExtractionStatus.COMPLETE:
+        return old
+    if field in ("first_name", "last_name"):
+        return _name_proposal(old, entry, page0)
+    if not entry["candidates"]:
         return old
     # ID / date not accepted: show what each model read, for the reviewer
     cands = [Candidate(raw=c, role_basis=f"labx reading (not accepted: {entry['reason']})"[:500],
