@@ -17,6 +17,7 @@ from __future__ import annotations
 import gc
 import logging
 import os
+import re
 import sys
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -49,6 +50,11 @@ def _labx():
 
 def _norm(field: str, value: str) -> str:
     return value.zfill(9) if field == "id" else value
+
+
+def _raw_text(candidate: str) -> str:
+    """'page:gemini-3.5-flash=16/6/26(c)' -> '16/6/26'."""
+    return re.sub(r"\([a-z]\)$", "", candidate.split("=", 1)[-1]).strip()
 
 
 def _evidence(page0: int, note: str) -> Evidence:
@@ -101,9 +107,18 @@ def _merge(old: FieldValue, field: str, entry: dict, page0: int, auto: bool) -> 
         return _name_proposal(old, entry, page0)
     if not entry["candidates"]:
         return old
-    # ID / date not accepted: show what each model read, for the reviewer
-    cands = [Candidate(raw=c, role_basis=f"labx reading (not accepted: {entry['reason']})"[:500],
-                       evidence=[_evidence(page0, c)]) for c in entry["candidates"]]
+    # ID / date not accepted: one clean candidate per distinct reading, for the reviewer; which model read what
+    # (the engine's "source:model=raw(legibility)" strings) stays in role_basis / evidence
+    note = f"labx reading (not accepted: {entry['reason']}): {'; '.join(entry['candidates'])}"
+    readings = entry.get("readings") or []
+    if readings:
+        values = [(v, _norm(field, v)) for v in readings]
+    else:   # no valid reading: show the raw text the models wrote, never as a normalized value
+        values = list(dict.fromkeys((_raw_text(c), None) for c in entry["candidates"] if _raw_text(c)))
+    if not values:
+        return old
+    cands = [Candidate(raw=raw, normalized=norm, role_basis=note[:500], evidence=[_evidence(page0, note)])
+             for raw, norm in values]
     reasons = list(old.uncertainty_reason) or [UncertaintyReason.RECOGNITION]
     status = old.extraction_status if old.extraction_status != ExtractionStatus.MISSING else ExtractionStatus.UNCERTAIN
     return old.model_copy(update={"extraction_status": status, "uncertainty_reason": reasons,
