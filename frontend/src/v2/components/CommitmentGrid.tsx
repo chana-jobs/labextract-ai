@@ -84,6 +84,13 @@ function savedValue(fv: FieldValue): string {
   return fv.normalized ?? fv.raw ?? "";
 }
 
+/** A reading offered to the reviewer (not a saved value); an ISO date is shown as DD/MM/YYYY. */
+function hintText(fv: FieldValue): string {
+  const text = fv.normalized ?? fv.raw ?? fv.candidates[0]?.normalized ?? fv.candidates[0]?.raw ?? "";
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  return iso ? `${iso[3]}/${iso[2]}/${iso[1]}` : text;
+}
+
 function StatusBadge({ row }: { row: CommitmentRowV2 }) {
   const { view, origin, reasons, derived } = row.status;
   if (view === "complete") {
@@ -114,7 +121,7 @@ export default function CommitmentGrid(props: CommitmentGridProps) {
     const key = cellKey(row.key, fv.field_name, index);
     const state = cellState(fv);
     const value = savedValue(fv);
-    const hint = !value ? (fv.normalized ?? fv.raw ?? fv.candidates[0]?.normalized ?? fv.candidates[0]?.raw ?? "") : "";
+    const hint = !value ? hintText(fv) : "";
     const error = cellErrors[key];
     const label = FIELD_LABELS[fv.field_name];
     return (
