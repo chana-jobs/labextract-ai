@@ -25,7 +25,8 @@ from functools import lru_cache
 from pathlib import Path
 
 from extraction import labx_overlay, pdf_text
-from shared.contracts import Form, Issue, IssueReason, ProcessingStatus, SplitStatus
+from shared.contracts import (Commitment, ExistenceStatus, ExtractionStatus, FieldName, FieldValue, Form, Issue,
+                              IssueReason, ProcessingStatus, SplitStatus, UncertaintyReason)
 
 ENGINES = ("pdf_text", "hybrid", "ocr")
 NO_TEXT_FLAGS = {"no_text_layer", "text_order_unsupported"}
@@ -118,6 +119,28 @@ def _needs_ocr(form: Form) -> bool:
     return exam is not None and bool(NO_TEXT_FLAGS & set(exam.first_name.flags))
 
 
+def _read_something(exam) -> bool:
+    """Any value or candidate on the form; a page with nothing read at all (no text, blank) gets no row."""
+    fields = [exam.first_name, exam.last_name, exam.israeli_id, exam.sample_received_date, exam.sender,
+              *exam.central_numbers]
+    return any(f.normalized or f.raw or f.candidates for f in fields)
+
+
+def _ensure_commitment_row(form: Form) -> Form:
+    """A processed form with no commitment number still gets ONE commitment row with an empty number, so the
+    fields that were read (name, ID, date, sender, central numbers) reach the review grid and the export instead
+    of the whole form disappearing. The COMMITMENT_COUNT_UNCERTAIN issue stays: there may be more rows."""
+    if form.processing_status != ProcessingStatus.DONE or all(e.commitments for e in form.examinations):
+        return form
+    exams = [e if e.commitments or not _read_something(e) else e.model_copy(update={"commitments": [Commitment(
+        commitment_id=f"{form.form_id}-c1", examination_id=e.examination_id,
+        existence_status=ExistenceStatus.UNCERTAIN, internal_index=0,
+        number=FieldValue(field_name=FieldName.COMMITMENT_NUMBER, extraction_status=ExtractionStatus.MISSING,
+                          uncertainty_reason=[UncertaintyReason.UNGROUNDED],
+                          flags=["no commitment number found"]))]}) for e in form.examinations]
+    return form.model_copy(update={"examinations": exams})
+
+
 def page_count(content: bytes, extension: str) -> int:
     if extension != ".pdf":
         return 1
@@ -136,8 +159,8 @@ def extract_page(file_id: str, content: bytes, extension: str, page: int) -> For
     mode = engine_mode()
     if mode == "ocr":
         pending = labx_overlay.start(content, extension, page)
-        return labx_overlay.apply(content, extension, page, ocr_pages(file_id, content, extension, [page])[page],
-                                  pending)
+        return _ensure_commitment_row(labx_overlay.apply(
+            content, extension, page, ocr_pages(file_id, content, extension, [page])[page], pending))
     if extension == ".pdf":
         import pymupdf
         with pymupdf.open(stream=content, filetype="pdf") as document:
@@ -146,15 +169,15 @@ def extract_page(file_id: str, content: bytes, extension: str, page: int) -> For
         [form] = pdf_text.extract_document(file_id, content, extension)
     if mode == "hybrid" and _needs_ocr(form):
         pending = labx_overlay.start(content, extension, page)
-        return labx_overlay.apply(content, extension, page, ocr_pages(file_id, content, extension, [page])[page],
-                                  pending)
-    return labx_overlay.apply(content, extension, page, form)
+        return _ensure_commitment_row(labx_overlay.apply(
+            content, extension, page, ocr_pages(file_id, content, extension, [page])[page], pending))
+    return _ensure_commitment_row(labx_overlay.apply(content, extension, page, form))
 
 
 def extract_document(file_id: str, content: bytes, extension: str) -> list[Form]:
     """One form per page, as pdf_text.extract_document; the engine is chosen by LABEXTRACT_ENGINE."""
     forms = _extract_document(file_id, content, extension)
-    return [labx_overlay.apply(content, extension, p, form) for p, form in enumerate(forms)]
+    return [_ensure_commitment_row(labx_overlay.apply(content, extension, p, form)) for p, form in enumerate(forms)]
 
 
 def _extract_document(file_id: str, content: bytes, extension: str) -> list[Form]:

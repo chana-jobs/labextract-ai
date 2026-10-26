@@ -7,7 +7,7 @@ import pymupdf
 import pytest
 
 from extraction import engine_select, pdf_text
-from shared.contracts import ApprovalStatus, ExtractionStatus, Form, IssueReason, ProcessingStatus
+from shared.contracts import ApprovalStatus, ExistenceStatus, ExtractionStatus, Form, IssueReason, ProcessingStatus
 
 FID = "dddddddddddddddddddddddddddddddd"
 TEXT = ["First name: Dana", "Last name: Levi", "Israeli ID: 000000018", "Sender: Synthetic Clinic",
@@ -62,7 +62,28 @@ def test_default_is_pdf_text_and_never_calls_ocr(monkeypatch, fake_ocr):
     monkeypatch.delenv("LABEXTRACT_ENGINE", raising=False)
     forms = engine_select.extract_document(FID, _pdf("text", "scan"), ".pdf")
     assert fake_ocr[0].calls == []
-    assert forms[1].examinations[0].commitments == []
+    assert forms[1].examinations[0].commitments == []     # nothing read on the page at all: no row
+
+
+def test_form_without_commitment_number_keeps_its_other_fields(monkeypatch, fake_ocr):
+    monkeypatch.delenv("LABEXTRACT_ENGINE", raising=False)
+    doc = pymupdf.open()
+    page = doc.new_page()
+    for n, line in enumerate(TEXT[:-1]):                   # every line except the commitment number
+        page.insert_text((72, 80 + 24 * n), line, fontsize=11)
+    [form] = engine_select.extract_document(FID, doc.tobytes(), ".pdf")
+    exam = form.examinations[0]
+    assert [c.commitment_id for c in exam.commitments] == [f"{FID}-p1-c1"]
+    assert exam.commitments[0].existence_status == ExistenceStatus.UNCERTAIN
+    assert exam.commitments[0].number.extraction_status == ExtractionStatus.MISSING
+    assert exam.israeli_id.normalized == "000000018" and exam.first_name.normalized == "Dana"
+    assert any(i.reason == IssueReason.COMMITMENT_COUNT_UNCERTAIN for i in form.issues)
+
+
+def test_failed_form_gets_no_commitment_row():
+    failed = Form(form_id="f", file_id=FID, page_regions=[{"page": 0}], processing_status=ProcessingStatus.FAILED,
+                  examinations=[])
+    assert engine_select._ensure_commitment_row(failed) is failed
 
 
 def test_hybrid_sends_only_scanned_pages_to_ocr(monkeypatch, fake_ocr):
