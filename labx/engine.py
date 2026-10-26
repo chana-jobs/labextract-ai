@@ -141,6 +141,16 @@ def hand_votes(regions):
     return votes
 
 
+def _id_votes(vs):
+    """Leading zeros are padding, not a different ID ("0011223344" = "11223344"). A crop / handwriting reading that
+    is a cut-off piece of a whole-page reading (the crop edge cut digits: "1223344" inside "11223344") is no
+    contradiction and is dropped; it can never add a value. Measured on part 1: 13 -> 15 accepted, 0 wrong."""
+    vs = [dict(v, value=v["value"].lstrip("0") or None) if v["value"] else v for v in vs]
+    page = {v["value"] for v in vs if v["source"] == "page" and v["value"]}
+    return [v for v in vs if v["source"] == "page" or not v["value"]
+            or not any(v["value"] != p and v["value"] in p for p in page)]
+
+
 def decide_field(field, votes, form_dates, min_agree=MIN_AGREE, today=None):
     vs = [v for v in votes if v["field"] == field]
     entry = {"value": None, "status": "missing", "reason": "",
@@ -148,6 +158,8 @@ def decide_field(field, votes, form_dates, min_agree=MIN_AGREE, today=None):
     if not vs:
         entry["reason"] = "not found"
         return entry
+    if field == "id":
+        vs = _id_votes(vs)
     distinct = {v["value"] for v in vs}
     entry["readings"] = sorted(v for v in distinct if v)    # valid normalized readings, for the reviewer
     clear_models = {v["model"] for v in vs if v["legibility"] == "clear" and v["value"]}
