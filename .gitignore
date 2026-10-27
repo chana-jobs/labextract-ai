@@ -12,3 +12,5 @@ __pycache__/
 
 # local measurement results (tools/measure_privacy.py)
 out_measure/
+out_measure_cached/
+out_measure*.log
