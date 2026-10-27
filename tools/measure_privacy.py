@@ -18,6 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(1, str(Path(os.environ.get("LABEXTRACT_OCR_DIR") or ROOT / "ocr_engine")))
 sys.stdout.reconfigure(encoding="utf-8")
 
 PDF = Path(r"C:\accthon_chani\חומרים\התחייבויות - דוגמאות, חלק 1 (PDF).pdf")
@@ -35,6 +36,17 @@ def truth():
                 "commitment": split(r[6])} for n, r in enumerate(rows, 1)}
 
 
+def same_sender(got, want):
+    """The same institution, not the same text: the engine returns the approved list's official name ('מרכז רפואי
+    ע"ש רמב"ם'), the Excel a short one ('רמב"ם'). Both are resolved through the list's aliases; a name the list does
+    not know falls back to exact text."""
+    from labextract_ocr.institutions import resolve_text
+    if got == want:
+        return True
+    a, b = resolve_text(got), resolve_text(want)
+    return bool(a and b and a & b)
+
+
 def score(form, t):
     """{field: [(mark, ...)]}: one mark per accepted value or per field, never the value itself."""
     exam = form.examinations[0] if form.examinations else None
@@ -45,7 +57,8 @@ def score(form, t):
     for field, fv, want in (("id", exam.israeli_id, t["id"]), ("date", exam.sample_received_date, t["date"]),
                             ("sender", exam.sender, t["sender"])):
         got = (fv.normalized.lstrip("0") if field == "id" else fv.normalized) if done(fv) else None
-        out[field].append("·" if got is None else ("✓" if got == want else "✗"))
+        ok = got is not None and (same_sender(got, want) if field == "sender" else got == want)
+        out[field].append("·" if got is None else ("✓" if ok else "✗"))
     for field, fvs, want in (("central", exam.central_numbers, t["central"]),
                              ("commitment", [c.number for c in exam.commitments], t["commitment"])):
         for fv in fvs:
