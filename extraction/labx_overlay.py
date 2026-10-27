@@ -157,8 +157,9 @@ def _crops():
 _ROTATE = {90: "ROTATE_90_CLOCKWISE", 180: "ROTATE_180", 270: "ROTATE_90_COUNTERCLOCKWISE"}
 
 
-def _region_crops(content: bytes, extension: str, page0: int, regions: list[dict]) -> list[tuple[str, bytes]]:
-    """Cut each located region from the page as the OCR engine loaded it, turned upright, enlarged."""
+def _region_crops(content: bytes, extension: str, page0: int, regions: list[dict]) -> list[tuple[str, bytes, dict]]:
+    """Cut each located region from the page as the OCR engine loaded it, turned upright, enlarged:
+    [(kind, jpeg, region)]."""
     import cv2
     import numpy as np
     if extension == ".pdf":
@@ -177,6 +178,9 @@ def _region_crops(content: bytes, extension: str, page0: int, regions: list[dict
         if r["kind"] == "central_annotation":       # a tight ink block: keep a margin so no digit is cut
             mx, my = (x1 - x0) // 8 + 10, (y1 - y0) // 8 + 10
             x0, y0, x1, y1 = x0 - mx, y0 - my, x1 + mx, y1 + my
+        elif r["kind"] == "commitment_cell":        # one token / cell box: room for the whole number, not the row
+            mx, my = (x1 - x0) // 6 + 10, (y1 - y0) + 10
+            x0, y0, x1, y1 = x0 - mx, y0 - my, x1 + mx, y1 + my
         c = img[max(0, y0):max(0, y1), max(0, x0):max(0, x1)]
         if c.size == 0:
             continue
@@ -184,7 +188,7 @@ def _region_crops(content: bytes, extension: str, page0: int, regions: list[dict
             c = cv2.rotate(c, getattr(cv2, _ROTATE[r["rotation"]]))
         f = max(1.0, 900 / max(c.shape[:2]))
         c = cv2.resize(c, None, fx=f, fy=f, interpolation=cv2.INTER_CUBIC)
-        out.append((r["kind"], cv2.imencode(".jpg", c, [cv2.IMWRITE_JPEG_QUALITY, 92])[1].tobytes()))
+        out.append((r["kind"], cv2.imencode(".jpg", c, [cv2.IMWRITE_JPEG_QUALITY, 92])[1].tobytes(), r))
     return out
 
 
@@ -198,16 +202,18 @@ def _run_crops(content: bytes, extension: str, page0: int, local: dict):
         if not hand:
             return "escalate", "no handwriting located"
         regions = _region_crops(content, extension, page0, local["regions"]) if local["regions"] else []
-        if not regions:
+        if not any(k in ("date_line", "central_annotation") for k, _, _ in regions):
             return "escalate", "no received-date region located"
-        res = _crops().extract(hand + regions, form_dates=local["form_dates"])
+        res = _crops().extract(hand + [(k, j) for k, j, _ in regions], form_dates=local["form_dates"],
+                               commitments=[{"item_id": r["item_id"], "candidates": r["candidates"]}
+                                            for k, _, r in regions if k == "commitment_cell"])
     except Exception as exc:
         _report(page0, time.monotonic() - t0, None, f"{type(exc).__name__}: {str(exc)[:300]}")
         return "sent", None
     finally:
         gc.collect()
-    res = {"fields": res["fields"], "log": {"crop_reads": res["log"]["crop_reads"],
-                                            "crop_kinds": res["log"]["crop_kinds"]}}
+    res = {"fields": res["fields"], "commitments": res.get("commitments", []),
+           "log": {"crop_reads": res["log"]["crop_reads"], "crop_kinds": res["log"]["crop_kinds"]}}
     _report(page0, time.monotonic() - t0, res)
     return "sent", res
 
@@ -274,6 +280,11 @@ def apply(content: bytes, extension: str, page0: int, form: Form, pending: Futur
         setattr(exam, name, _merge(getattr(exam, name), field, res["fields"][field], page0, auto))
     if "central_number" in res["fields"]:           # crops-first only: the lab's handwritten central number
         exam.central_numbers = _merge_central(exam.central_numbers, res["fields"]["central_number"], page0, auto)
+    by_id = {c.commitment_id: c for c in exam.commitments}
+    for entry in res.get("commitments", []):        # crops-first only: commitment cells the OCR could not decide
+        c = by_id.get(f"{form.form_id}-{entry['item_id']}")
+        if c is not None:
+            c.number = _merge(c.number, "commitment_number", entry, page0, auto)
     return Form.model_validate(form.model_dump())
 
 
