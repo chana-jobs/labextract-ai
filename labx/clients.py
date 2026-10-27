@@ -230,17 +230,27 @@ def ask(model, prompt, image_bytes, schema=None, retries=4, use_cache=True):
     raise ModelError(f"{model}: {str(last)[:300]}")
 
 
+SLOT_BUDGET_S = float(os.environ.get("LABX_SLOT_BUDGET_S", "0"))   # 0 = no limit (local evaluation)
+
+
 def ask_slot(slot, prompt, image_bytes, schema=None):
     """A reader slot = ordered list of interchangeable models. Reuse any cached answer first (saves quota),
-    else try the models in order. Returns (model_used, parsed)."""
+    else try the models in order. Returns (model_used, parsed).
+    LABX_SLOT_BUDGET_S (the server): no further model is started once the slot has used that many seconds, and
+    each model gets one attempt - a page must finish inside the web request even when Gemini is overloaded; an
+    unanswered slot only leaves its fields for review."""
     for m in slot:
         c = cached(m, prompt, image_bytes, schema)
         if c is not None:
             return m, c
-    last = None
+    last, t0 = None, time.monotonic()
     for m in slot:
+        if SLOT_BUDGET_S and time.monotonic() - t0 > SLOT_BUDGET_S:
+            last = ModelError(f"slot time budget of {SLOT_BUDGET_S:.0f}s used")
+            break
         try:
-            return m, ask(m, prompt, image_bytes, schema=schema, retries=2 if m != slot[-1] else 4)
+            retries = 1 if SLOT_BUDGET_S else (2 if m != slot[-1] else 4)
+            return m, ask(m, prompt, image_bytes, schema=schema, retries=retries)
         except Exception as e:
             last = e
     raise ModelError(f"slot {slot[0]}...: {str(last)[:200]}")

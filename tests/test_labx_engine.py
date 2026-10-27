@@ -70,3 +70,22 @@ def test_the_two_reader_slots_never_share_a_model():
     a, b = (set(s) for s in engine.DEFAULT_SLOTS)
     assert not a & b
     assert not any("lite-latest" in m for m in a | b)
+
+
+def test_slot_budget_stops_trying_more_models(monkeypatch):
+    """On the server a reader gives up after its time budget instead of walking every fallback model."""
+    from labx import clients
+    import time as _t
+    tried = []
+
+    def slow_fail(model, *a, **k):
+        tried.append(model)
+        _t.sleep(0.05)
+        raise clients.ModelError("timeout")
+    monkeypatch.setattr(clients, "SLOT_BUDGET_S", 0.08)
+    monkeypatch.setattr(clients, "ask", slow_fail)
+    monkeypatch.setattr(clients, "cached", lambda *a, **k: None)
+    import pytest
+    with pytest.raises(clients.ModelError):
+        clients.ask_slot(["m1", "m2", "m3", "m4", "m5"], "p", b"x")
+    assert len(tried) < 5
