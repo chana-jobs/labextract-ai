@@ -15,8 +15,11 @@ read as absent); pages that pdf_text already read are kept.
 """
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
+import statistics
 import sys
 import tempfile
 import threading
@@ -86,6 +89,54 @@ def _failed_form(file_id: str, page: int, note: str) -> Form:
                               note=note)])
 
 
+DATE_LINE = re.compile(r"[-–~]\s?\d{1,2}\s?[-–~]")      # a dater prints the month as "-08-"
+YEAR = re.compile(r"20\d\d")
+TALL_YEAR = 1.4     # the dater's year is larger than print; measured on part 1: 1.3 already adds a false hit
+
+
+def date_line_boxes(tokens: list[dict]) -> list[list[int]]:
+    """Oriented-frame boxes of received-date lines found in OCR tokens: a "-mm-" token or a standalone year printed
+    larger than the page's text, grouped per line and widened to hold the day, "התקבל" above and the frame.
+    Located only - never read. Part 1: stamps located 10/13 (was 7), 0 false hits on the 13 pages without one."""
+    if not tokens:
+        return []
+    med = statistics.median(t["bbox"][3] - t["bbox"][1] for t in tokens)
+    anchors = [t["bbox"] for t in tokens
+               if DATE_LINE.fullmatch(t["text"].strip())
+               or (YEAR.fullmatch(t["text"].strip()) and t["bbox"][3] - t["bbox"][1] >= TALL_YEAR * med)]
+    lines: list[list[int]] = []
+    for b in sorted(anchors):
+        h = b[3] - b[1]
+        line = next((ln for ln in lines if b[1] < ln[3] and b[3] > ln[1] and b[0] - ln[2] < 6 * h), None)
+        if line:
+            line[:] = [min(line[0], b[0]), min(line[1], b[1]), max(line[2], b[2]), max(line[3], b[3])]
+        else:
+            lines.append(list(b))
+    out = []
+    for x0, y0, x1, y1 in lines:
+        h = y1 - y0
+        out.append([x0 - 5 * h, y0 - 4 * h, x1 + 3 * h, y1 + 3 * h])
+    return out
+
+
+def _date_lines(page: dict, cache: Path) -> list[dict]:
+    """[{bbox, rotation, dpi, source_size}] for one OCR result page: bbox in the pixels of the page as the engine
+    loaded it (a PDF at `dpi`; an image possibly upscaled to `source_size`); [] when nothing was located."""
+    key = (page.get("ocr") or {}).get("cache_key")
+    frame = page.get("frame")
+    if page.get("processing_status") != "DONE" or not key or not frame:
+        return []
+    try:
+        tokens = json.loads((cache / f"{key}.json").read_text(encoding="utf-8"))["tokens"]
+    except (OSError, ValueError, KeyError):
+        return []
+    from labextract_ocr.orient import to_source_bbox
+    W, H = frame["oriented_size"]
+    return [{"bbox": to_source_bbox([max(0, b[0]), max(0, b[1]), min(W - 1, b[2]), min(H - 1, b[3])], frame),
+             "rotation": frame["rotation_applied"], "dpi": frame.get("dpi"), "source_size": frame["source_size"]}
+            for b in date_line_boxes(tokens)]
+
+
 def ocr_pages(file_id: str, content: bytes, extension: str, pages: list[int]) -> dict[int, Form]:
     """{0-based page: Form} from the OCR engine for the given 0-based pages."""
     try:
@@ -100,6 +151,8 @@ def ocr_pages(file_id: str, content: bytes, extension: str, pages: list[int]) ->
         path.write_bytes(content)
         try:
             result = engine.extract_file(path, [p + 1 for p in pages] if extension == ".pdf" else None)
+            for page in result["pages"]:        # the token cache is emptied below: locate the date line now
+                labx_overlay.remember_date_lines(file_id, page["page"] - 1, _date_lines(page, cache))
         finally:
             _clear(cache)
         print(f"[ocr] pages={[p + 1 for p in pages]} waited_for_lock={t_ocr - t_wait:.1f}s "

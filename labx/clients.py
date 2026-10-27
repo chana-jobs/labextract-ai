@@ -70,12 +70,18 @@ class ModelError(Exception):
     pass
 
 
+def _images(image_bytes):
+    """One JPEG, or several of the same form sent together in one request."""
+    return list(image_bytes) if isinstance(image_bytes, (list, tuple)) else [image_bytes]
+
+
 def _cache_path(model, prompt, image_bytes, extra=""):
     h = hashlib.sha256()
     for part in (model, prompt, extra):
         h.update(part.encode("utf-8"))
         h.update(b"\0")
-    h.update(hashlib.sha256(image_bytes).digest())
+    for img in _images(image_bytes):        # a single image hashes exactly as before: the existing cache stays valid
+        h.update(hashlib.sha256(img).digest())
     return CACHE_DIR / f"{h.hexdigest()[:32]}.json"
 
 
@@ -102,21 +108,19 @@ def _gemini_call(model, prompt, image_bytes, schema, key_index):
         cfg["response_json_schema"] = schema
     resp = client.models.generate_content(
         model=model,
-        contents=[types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"), prompt],
+        contents=[types.Part.from_bytes(data=img, mime_type="image/jpeg") for img in _images(image_bytes)] + [prompt],
         config=types.GenerateContentConfig(**cfg),
     )
     return resp.text
 
 
 def _openrouter_call(model, prompt, image_bytes, schema):
-    b64 = base64.b64encode(image_bytes).decode()
+    images = [{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64.b64encode(img).decode()}"}}
+              for img in _images(image_bytes)]
     body = {
         "model": model,
         "temperature": 0,
-        "messages": [{"role": "user", "content": [
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-            {"type": "text", "text": prompt},
-        ]}],
+        "messages": [{"role": "user", "content": images + [{"type": "text", "text": prompt}]}],
     }
     if schema:
         body["response_format"] = {"type": "json_schema", "json_schema": {"name": "out", "strict": True, "schema": schema}}
