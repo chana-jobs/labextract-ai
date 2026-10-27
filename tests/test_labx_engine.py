@@ -63,3 +63,10 @@ def test_stamp_not_located_blocks():
 def test_zoom_never_adds_a_value():
     pending = {"value": None, "status": "review", "reason": "1 models clear (< 2)", "candidates": []}
     assert engine._confirm_date(pending, [_d("crop", "a", "2026-08-20")]) is pending
+
+
+def test_the_two_reader_slots_never_share_a_model():
+    """A consensus must rest on two DIFFERENT models: no model, and no "-latest" alias, in both slots."""
+    a, b = (set(s) for s in engine.DEFAULT_SLOTS)
+    assert not a & b
+    assert not any("lite-latest" in m for m in a | b)
