@@ -129,13 +129,95 @@ def _merge(old: FieldValue, field: str, entry: dict, page0: int, auto: bool) -> 
 _pool = ThreadPoolExecutor(max_workers=int(os.environ.get("LABX_WORKERS", "1")), thread_name_prefix="labx")
 
 
+def crops_first() -> bool:
+    """LABX_MODE=crops_first: send only locally located crops; the full page only when a field was not located."""
+    return os.environ.get("LABX_MODE", "full_page") == "crops_first"
+
+
+# date lines located in the OCR tokens (engine_select), kept until the page is merged: {(file_id, page0): [...]}
+_DATE_LINES: dict[tuple[str, int], list[dict]] = {}
+
+
+def remember_date_lines(file_id: str, page0: int, lines: list[dict]) -> None:
+    if lines:
+        _DATE_LINES[(file_id, page0)] = lines
+    else:
+        _DATE_LINES.pop((file_id, page0), None)
+
+
+@lru_cache
+def _crops():
+    _labx()                               # puts LABX_DIR on sys.path
+    from labx import crops
+    return crops
+
+
+_ROTATE = {90: "ROTATE_90_CLOCKWISE", 180: "ROTATE_180", 270: "ROTATE_90_COUNTERCLOCKWISE"}
+
+
+def _date_line_crops(content: bytes, extension: str, page0: int, lines: list[dict]) -> list[tuple[str, bytes]]:
+    """Cut each located date line from the page as the OCR engine loaded it, turned upright, enlarged."""
+    import cv2
+    import numpy as np
+    if extension == ".pdf":
+        import pymupdf
+        with pymupdf.open(stream=content, filetype="pdf") as doc:
+            png = doc[page0].get_pixmap(dpi=lines[0]["dpi"]).tobytes("png")
+        img = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR)
+    else:
+        img = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_COLOR)
+    W, H = lines[0]["source_size"]
+    if (img.shape[1], img.shape[0]) != (W, H):       # an image the engine upscaled
+        img = cv2.resize(img, (W, H), interpolation=cv2.INTER_CUBIC)
+    out = []
+    for ln in lines:
+        x0, y0, x1, y1 = ln["bbox"]
+        c = img[max(0, y0):y1, max(0, x0):x1]
+        if c.size == 0:
+            continue
+        if ln["rotation"] in _ROTATE:
+            c = cv2.rotate(c, getattr(cv2, _ROTATE[ln["rotation"]]))
+        f = max(1.0, 900 / max(c.shape[:2]))
+        c = cv2.resize(c, None, fx=f, fy=f, interpolation=cv2.INTER_CUBIC)
+        out.append(("date_line", cv2.imencode(".jpg", c, [cv2.IMWRITE_JPEG_QUALITY, 92])[1].tobytes()))
+    return out
+
+
+def _run_crops(content: bytes, extension: str, page0: int, lines: list[dict]):
+    """("sent", result or None on failure) or ("escalate", reason) when a field could not be located locally.
+    A technical failure never escalates to the full page: the form is kept as it is, as on the full-page path."""
+    t0 = time.monotonic()
+    try:
+        hand = _crops().handwriting_crops(content, extension, page0)
+        if not hand:
+            return "escalate", "no handwriting located"
+        if not lines:
+            return "escalate", "no date line located"
+        date = _date_line_crops(content, extension, page0, lines)
+        if not date:
+            return "escalate", "date line outside the page"
+        res = _crops().extract(hand + date)
+    except Exception as exc:
+        _report(page0, time.monotonic() - t0, None, f"{type(exc).__name__}: {str(exc)[:300]}")
+        return "sent", None
+    finally:
+        gc.collect()
+    res = {"fields": res["fields"], "log": {"crop_reads": res["log"]["crop_reads"],
+                                            "crop_kinds": res["log"]["crop_kinds"]}}
+    _report(page0, time.monotonic() - t0, res)
+    return "sent", res
+
+
 def _report(page0: int, seconds: float, res: dict | None, error: str | None = None) -> None:
     """One log line per page: timing, field statuses and reader errors. Never field values (patient data)."""
     if res is None:
         print(f"[labx] page={page0 + 1} FAILED after {seconds:.1f}s: {error}", flush=True)
         return
     statuses = {f: e["status"] for f, e in res["fields"].items()}
-    reads = res.get("log", {}).get("page_reads", {})
+    log = res.get("log", {})
+    reads = log.get("page_reads") or log.get("crop_reads") or {}
+    if "crop_kinds" in log:
+        print(f"[labx] page={page0 + 1} sent=crops {log['crop_kinds']}", flush=True)
     errors = {m.split(":")[-1]: r["_error"][:160] for m, r in reads.items() if isinstance(r, dict) and "_error" in r}
     print(f"[labx] page={page0 + 1} {seconds:.1f}s rotated={res.get('rotated')} fields={statuses} "
           f"readers={[m.split(':')[-1] for m in reads]} errors={errors}", flush=True)
@@ -157,19 +239,28 @@ def _run(content: bytes, extension: str, page0: int):
 
 
 def start(content: bytes, extension: str, page0: int) -> Future | None:
-    """Start the labx reading in the background (it runs while the local OCR reads the same page)."""
-    return _pool.submit(_run, content, extension, page0) if enabled() else None
+    """Start the labx reading in the background (it runs while the local OCR reads the same page). Not in
+    crops-first mode: the crops need the OCR result first, and the full page must not be sent before we know."""
+    return _pool.submit(_run, content, extension, page0) if enabled() and not crops_first() else None
 
 
 def apply(content: bytes, extension: str, page0: int, form: Form, pending: Future | None = None) -> Form:
     """Merge the labx result into the page form. `pending` = a reading already started with start()."""
+    lines = _DATE_LINES.pop((form.file_id, page0), [])
     if not enabled() or form.processing_status != ProcessingStatus.DONE or not form.examinations:
         return form
     exam = form.examinations[0]
     if pending is None and all(getattr(exam, f).extraction_status == ExtractionStatus.COMPLETE
                                for f in FIELDS.values()):
         return form                       # text-layer page already read all four exactly: save model quota
-    res = pending.result() if pending is not None else _run(content, extension, page0)
+    res = None
+    if crops_first() and pending is None:
+        outcome, res = _run_crops(content, extension, page0, lines)
+        if outcome == "escalate":
+            print(f"[labx] page={page0 + 1} sent=full_page ({res})", flush=True)
+            res = _run(content, extension, page0)
+    else:
+        res = pending.result() if pending is not None else _run(content, extension, page0)
     if res is None:
         return form
     auto = os.environ.get("LABX_AUTO_APPROVE") == "1"
