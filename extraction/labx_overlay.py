@@ -257,6 +257,7 @@ def _run_crops(content: bytes, extension: str, page0: int, local: dict):
     targets = [{k: r.get(k) for k in ("target", "value", "item_id")} for k, _, r in regions if k == "confirm_value"]
     res = {"fields": res["fields"], "commitments": res.get("commitments", []),
            "confirmations": list(zip(targets, res.get("confirmations", []))),
+           "sender_readings": res.get("sender_readings", []),
            "log": {"crop_reads": res["log"]["crop_reads"], "crop_kinds": res["log"]["crop_kinds"]}}
     _report(page0, time.monotonic() - t0, res)
     return "sent", res
@@ -313,6 +314,9 @@ def apply(content: bytes, extension: str, page0: int, form: Form, pending: Futur
         if outcome == "escalate":
             print(f"[labx] page={page0 + 1} sent=full_page ({res})", flush=True)
             res = _in_time(page0, deadline, _run, content, extension, page0)
+            if res is not None:             # the full-page read does not decide the sender: its letterhead crop does
+                res["sender_readings"] = _in_time(page0, deadline, _run_letterhead, content, extension, page0,
+                                                  local) or []
     elif pending is not None:
         res = _in_time(page0, deadline, pending.result)
     else:
@@ -334,7 +338,68 @@ def apply(content: bytes, extension: str, page0: int, form: Form, pending: Futur
             c.number = _merge(c.number, "commitment_number", entry, page0, auto)
     for target, readings in res.get("confirmations", []):   # crops-first only: a second reader for OCR values
         _confirm_ocr_value(form, exam, target, readings, page0, auto)
+    if "sender_readings" in res:                            # crops-first only: the sender by its letterhead
+        exam.sender = _decide_sender(exam.sender, res["sender_readings"], page0, auto)
     return Form.model_validate(form.model_dump())
+
+
+HEALTH_FUNDS = ("כללית", "מכבי", "מאוחדת", "לאומית")
+
+
+def _institutions(text: str) -> set[str]:
+    """Approved-list institutions named in a text (their official names); never the receiving laboratory."""
+    try:
+        from labextract_ocr.institutions import RECEIVER_SIDE, resolve_text
+    except ImportError:                    # the OCR engine is not loaded: no list, no decision
+        return set()
+    return resolve_text(text or "") - RECEIVER_SIDE
+
+
+def _run_letterhead(content: bytes, extension: str, page0: int, local: dict) -> list:
+    """The letterhead crop alone, for a page sent as a full page (its read does not ask for the sender)."""
+    regions = [r for r in local["regions"] if r["kind"] == "letterhead"]
+    if not regions:
+        return []
+    try:
+        return _crops().extract([(k, j) for k, j, _ in _region_crops(content, extension, page0, regions)]
+                                ).get("sender_readings", [])
+    except Exception as exc:
+        print(f"[labx] page={page0 + 1} letterhead FAILED: {type(exc).__name__}: {str(exc)[:200]}", flush=True)
+        return []
+
+
+def _decide_sender(old: FieldValue, readings: list, page0: int, auto: bool) -> FieldValue:
+    """The sender is the institution whose letterhead the form carries. The OCR finds institution NAMES on the page
+    but cannot tell the sender from the patient's health fund printed on the form (part 2: 6/6 wrong senders were
+    the patient's fund; part 1: 10/26 senders really are a fund). Two different models, both "clear", naming the
+    same institution of the approved list from the letterhead crop decide it. Otherwise a sender the OCR found
+    that is a health fund is held for review (shown as a hint), and any other OCR sender stays as read."""
+    clear = [(m, t) for m, t, leg in readings if leg == "clear" and t.strip()]
+    named = [_institutions(t) for _, t in clear]
+    agreed = None
+    if len({m for m, _ in clear}) >= 2 and all(named):
+        common = set.intersection(*named)
+        agreed = next(iter(common)) if len(common) == 1 else None
+    note = "letterhead: two models name the same institution of the approved list"
+    if agreed:
+        if old.extraction_status == ExtractionStatus.COMPLETE and agreed in ({old.normalized} | _institutions(old.normalized)):
+            return confirm.confirmed(old, Verification.AGREEMENT, page0, note) if auto else old
+        if all("lite" in m.split(":")[-1] for m, _ in clear):
+            agreed = None                  # models alone, lite only: never decide (labx engine.decide_field, 27.10)
+    if agreed:
+        return FieldValue(field_name=old.field_name, raw=agreed, normalized=agreed,
+                          extraction_status=ExtractionStatus.COMPLETE,
+                          dimensions=Dimensions(readability=Readability.OK, attribution=Attribution.STRONG,
+                                                verification=Verification.AGREEMENT if auto else Verification.NONE),
+                          candidates=[Candidate(raw=agreed, normalized=agreed, role_basis=note)],
+                          evidence=list(old.evidence) + [_evidence(page0, note)])
+    if old.extraction_status == ExtractionStatus.COMPLETE and any(f in (old.normalized or "") for f in HEALTH_FUNDS):
+        return FieldValue(field_name=old.field_name, extraction_status=ExtractionStatus.UNCERTAIN,
+                          uncertainty_reason=[UncertaintyReason.ATTRIBUTION], flags=["sender_may_be_patient_fund"],
+                          candidates=[Candidate(raw=old.normalized, normalized=old.normalized,
+                                                role_basis="a health fund on the form - may be the patient's fund")],
+                          evidence=list(old.evidence))
+    return old
 
 
 def _same_institution(a: str, b: str) -> bool:

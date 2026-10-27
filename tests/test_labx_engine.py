@@ -89,3 +89,15 @@ def test_slot_budget_stops_trying_more_models(monkeypatch):
     with pytest.raises(clients.ModelError):
         clients.ask_slot(["m1", "m2", "m3", "m4", "m5"], "p", b"x")
     assert len(tried) < 5
+
+
+def test_two_lite_models_agreeing_only_propose():
+    """27.10 part 1: with the main quota used up, 3.5-flash-lite + 3.1-flash-lite agreed on 3 wrong values."""
+    votes = [_d("page", "gemini:gemini-3.5-flash-lite", "2026-08-20"), _d("page", "gemini:gemini-3.1-flash-lite", "2026-08-20")]
+    e = engine.decide_field("received_date", votes, [])
+    assert e["status"] == "review" and e["reason"] == "only lite models agree" and e["readings"] == ["2026-08-20"]
+
+
+def test_a_full_model_with_a_lite_one_is_enough():
+    votes = [_d("page", "gemini:gemini-3.6-flash", "2026-08-20"), _d("page", "gemini:gemini-3.5-flash-lite", "2026-08-20")]
+    assert engine.decide_field("received_date", votes, [])["status"] == "accepted"

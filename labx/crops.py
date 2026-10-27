@@ -22,6 +22,7 @@ KINDS = {
                           "with the receipt date written under it (e.g. \"16/6/26\")",
     "commitment_cell": "a printed commitment (התחייבות) number in a table cell or next to its label",
     "confirm_value": "one printed value - a number, or the name of an institution - to copy exactly",
+    "letterhead": "the top of the form: the logo / letterhead / header of the institution that issued it",
 }
 
 _LEG = SCHEMA["properties"]["received_date_legibility"]
@@ -31,6 +32,8 @@ _EXTRA = {"central_number": {"type": "string"},
               "type": "object", "properties": {"image": {"type": "integer"}, "number": {"type": "string"},
                                                "legibility": _LEG},
               "required": ["image", "number", "legibility"], "additionalProperties": False}},
+          "sender_name": {"type": "string"},
+          "sender_legibility": _LEG,
           "confirm_readings": {"type": "array", "items": {
               "type": "object", "properties": {"image": {"type": "integer"}, "text": {"type": "string"},
                                                "legibility": _LEG},
@@ -65,6 +68,11 @@ written (usually 6). Not the date under it, not a phone, barcode, ID or commitme
 
 COMMITMENT NUMBERS: one entry per "commitment_cell" image (image = its number above): the commitment number in
 that image, every digit exactly as printed, including leading zeros. [] when there is no such image.
+
+SENDER: only from a "letterhead" image: the institution that ISSUED this form - the hospital, clinic, laboratory or
+health fund whose logo / letterhead / printed header it is. NOT the patient's health fund written in a field (e.g.
+"קופ"ח: מכבי" inside the form's details), not the receiving laboratory ("המעבדה המרכזית לנגיפים"). Copy its name as
+printed. "" and legibility "none" if no letterhead or logo is visible.
 
 CONFIRM READINGS: one entry per "confirm_value" image: the main printed value in it (the number, or the
 institution's name) copied exactly as printed, character by character. [] when there is no such image.
@@ -168,5 +176,7 @@ def extract(crops, readers=None, min_agree=engine.MIN_AGREE, form_dates=(), comm
         fields["id"] = dict(fields["id"], value=None, status="review",
                             reason="crops: ID check digit fails (digits may be cut off at the crop edge)")
     log = {"crop_kinds": kinds, "crop_reads": {m: (r if r is not None else {"_error": e}) for m, r, e in reads}}
+    sender = [(model, r.get("sender_name", ""), r.get("sender_legibility", "none"))
+              for model, r, _ in reads if r is not None] if "letterhead" in kinds else []
     return {"fields": fields, "commitments": _commitments(reads, kinds, list(commitments), min_agree),
-            "confirmations": _confirmations(reads, kinds), "log": log}
+            "confirmations": _confirmations(reads, kinds), "sender_readings": sender, "log": log}
