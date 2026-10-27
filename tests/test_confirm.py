@@ -129,3 +129,52 @@ def test_the_sender_is_never_sent_for_confirmation():
                        "central_numbers": {"status": "proposed", "values": ["939376"],
                                            "candidates": [{"value": "939376", "bbox": [1, 30, 60, 50]}]}}}
     assert [m["target"] for _, m in engine_select.confirm_value_boxes(page)] == ["central"]
+
+
+# ---------------------------------------------------------------- commitment from an unlabeled Code 39 barcode
+from extraction import engine_select  # noqa: E402
+
+PAGE = {"fields": {"commitment_numbers": {"status": "missing", "items": [], "candidates": []},
+                   "central_numbers": {"status": "proposed", "values": ["948257"], "candidates": []}},
+        "barcodes": [{"text": "282574736601", "format": "Code 128"}, {"text": "82857", "format": "Code 39"},
+                     {"text": "948257", "format": "Code 128"}]}
+
+
+def test_only_a_code39_barcode_is_taken_as_the_commitment():
+    """part 2 p16: Code 128 = the central sticker and a hospital number, Code 39 = the commitment."""
+    assert engine_select.barcode_commitments(PAGE, []) == ["82857"]
+
+
+def test_a_central_number_is_never_taken_even_in_code39():
+    page = dict(PAGE, barcodes=[{"text": "948257", "format": "Code 39"}])
+    assert engine_select.barcode_commitments(page, []) == []
+
+
+def test_the_printed_letter_is_kept():
+    """part 2 p15: the barcode encodes 132797, the commitment is printed X132797."""
+    page = dict(PAGE, barcodes=[{"text": "132797", "format": "Code 39"}])
+    toks = [{"text": "X132797", "bbox": [0, 0, 10, 10]}]
+    assert engine_select.barcode_commitments(page, toks) == ["X132797"]
+
+
+def test_no_barcode_commitment_when_the_ocr_found_one():
+    page = dict(PAGE, fields={**PAGE["fields"], "commitment_numbers": {"status": "proposed", "values": ["1"]}})
+    assert engine_select.barcode_commitments(page, []) == []
+
+
+def test_barcode_commitment_is_filled_flagged_and_never_approved(auto_on):
+    form = _form()
+    form.examinations[0].commitments = []
+    form = confirm.with_barcode_commitments(form, ["82857"], 0)
+    form = confirm.with_barcodes(form, [{"text": "82857"}], 0)          # its own barcode must not confirm it
+    [c] = apply_auto_approval(form).examinations[0].commitments
+    assert c.number.normalized == "82857" and c.number.approval_status == ApprovalStatus.PENDING
+    assert confirm.BARCODE_ONLY in c.number.flags
+
+
+def test_a_weak_central_candidate_does_not_block_the_commitment():
+    """The OCR lists every number of the page as a weak central candidate, the commitment too (part 2 p16)."""
+    page = dict(PAGE, fields={**PAGE["fields"], "central_numbers": {
+        "status": "proposed", "values": ["948257"],
+        "candidates": [{"value": "948257", "tier": "strong"}, {"value": "82857", "tier": "weak"}]}})
+    assert engine_select.barcode_commitments(page, []) == ["82857"]

@@ -174,6 +174,45 @@ def confirm_value_boxes(page: dict) -> list[tuple[list[int], dict]]:
     return out
 
 
+def _tokens(page: dict, cache: Path) -> list[dict]:
+    key = (page.get("ocr") or {}).get("cache_key")
+    try:
+        return json.loads((cache / f"{key}.json").read_text(encoding="utf-8"))["tokens"] if key else []
+    except (OSError, ValueError, KeyError):
+        return []
+
+
+LETTER_NUMBER = re.compile(r"[A-Za-z]{1,2}\d{3,}")
+
+
+def barcode_commitments(page: dict, tokens: list[dict]) -> list[str]:
+    """Commitment numbers printed only as a barcode, with no label (part 2: 'ההתחייבות ללא שם מוגדר (ברקוד)'), for a
+    page where the OCR found no commitment. Only Code 39: on the samples every Code 39 barcode was the commitment,
+    while central stickers and hospital case / visit numbers were Code 128 (an 'any unlabeled barcode' rule would
+    have filled ~12 wrong values on part 2). A central number is never taken. When the printed text beside it adds a
+    letter ('X132797' over a barcode '132797'), the printed text is the value. Proposed for review, never approved."""
+    F = page.get("fields") or {}
+    com = F.get("commitment_numbers") or {}
+    if com.get("status") == "proposed" or any(it.get("status") == "proposed" for it in com.get("items") or []):
+        return []
+    cen = F.get("central_numbers") or {}
+    # the OCR's weak central candidates are any number on the page - the commitment itself included (p16: '82857')
+    centrals = {confirm.digits(v) for v in cen.get("values") or []} | \
+               {confirm.digits(c.get("value")) for c in cen.get("candidates") or []
+                if (c.get("role") or c.get("tier")) == "strong"}
+    out = []
+    for b in page.get("barcodes") or []:
+        text = (b.get("text") or "").strip()
+        if not str(b.get("format", "")).startswith("Code 39") or not text or confirm.digits(text) in centrals:
+            continue
+        printed = next((t["text"].strip().upper() for t in tokens if LETTER_NUMBER.fullmatch(t["text"].strip())
+                        and confirm.digits(t["text"]) == confirm.digits(text)), None)
+        value = printed or text
+        if value not in out:
+            out.append(value)
+    return out if len(out) <= 2 else []      # more than two unlabeled Code 39 codes: not a pattern we have seen
+
+
 def printed_dates(tokens: list[dict], regions: list[list[int]]) -> list[str]:
     """Dates printed on the form (issue / print / visit), for the received-date validator: print-size date tokens
     outside the located regions (a handwritten receipt date there must not count as 'printed')."""
@@ -247,6 +286,7 @@ def ocr_pages(file_id: str, content: bytes, extension: str, pages: list[int]) ->
             result = engine.extract_file(path, [p + 1 for p in pages] if extension == ".pdf" else None)
             for page in result["pages"]:        # the token cache is emptied below: locate the regions now
                 labx_overlay.remember_regions(file_id, page["page"] - 1, _local_regions(page, cache))
+                page["_barcode_commitments"] = barcode_commitments(page, _tokens(page, cache))
         finally:
             _clear(cache)
         print(f"[ocr] pages={[p + 1 for p in pages]} waited_for_lock={t_ocr - t_wait:.1f}s "
@@ -255,6 +295,7 @@ def ocr_pages(file_id: str, content: bytes, extension: str, pages: list[int]) ->
     for page in result["pages"]:
         form = page_to_form(file_id, page, result["engine_version"])
         form = Form.model_validate(form.model_dump(mode="json"))
+        form = confirm.with_barcode_commitments(form, page.get("_barcode_commitments") or [], page["page"] - 1)
         forms[page["page"] - 1] = confirm.with_barcodes(form, page.get("barcodes"), page["page"] - 1)
     for p in pages:     # a page the engine did not return is a technical failure, not an empty page
         forms.setdefault(p, _failed_form(file_id, p, "OCR returned no result for this page"))
