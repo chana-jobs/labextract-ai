@@ -21,6 +21,7 @@ import re
 import sys
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from functools import lru_cache
 from pathlib import Path
 
@@ -149,6 +150,25 @@ def _merge(old: FieldValue, field: str, entry: dict, page0: int, auto: bool) -> 
 
 # one labx page at a time per server: it already runs next to the OCR, and two of each exhausted the memory
 _pool = ThreadPoolExecutor(max_workers=int(os.environ.get("LABX_WORKERS", "1")), thread_name_prefix="labx")
+
+# LABX_PAGE_BUDGET_S (the server): the whole model stage of one page must end in time for the web request (Vercel
+# stops it at 300 s; 27.10 a page hung after the OCR until that limit). Past the budget the page is kept as the OCR
+# read it - its fields stay for review - and the late result is ignored. 0 = no limit (local evaluation).
+PAGE_BUDGET_S = float(os.environ.get("LABX_PAGE_BUDGET_S", "0"))
+_budget_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="labx-page")
+
+
+def _in_time(page0: int, deadline: float, fn, *args):
+    """fn(*args), or None when the page budget runs out first (the call is left to finish in the background)."""
+    if not PAGE_BUDGET_S:
+        return fn(*args)
+    future = _budget_pool.submit(fn, *args)
+    try:
+        return future.result(timeout=max(1.0, deadline - time.monotonic()))
+    except FuturesTimeout:
+        print(f"[labx] page={page0 + 1} GAVE UP after the page budget of {PAGE_BUDGET_S:.0f}s; "
+              "the page keeps what the OCR read", flush=True)
+        return None
 
 
 def crops_first() -> bool:
@@ -287,14 +307,16 @@ def apply(content: bytes, extension: str, page0: int, form: Form, pending: Futur
     if pending is None and all(getattr(exam, f).extraction_status == ExtractionStatus.COMPLETE
                                for f in FIELDS.values()):
         return form                       # text-layer page already read all four exactly: save model quota
-    res = None
+    res, deadline = None, time.monotonic() + PAGE_BUDGET_S
     if crops_first() and pending is None:
-        outcome, res = _run_crops(content, extension, page0, local)
+        outcome, res = _in_time(page0, deadline, _run_crops, content, extension, page0, local) or ("sent", None)
         if outcome == "escalate":
             print(f"[labx] page={page0 + 1} sent=full_page ({res})", flush=True)
-            res = _run(content, extension, page0)
+            res = _in_time(page0, deadline, _run, content, extension, page0)
+    elif pending is not None:
+        res = _in_time(page0, deadline, pending.result)
     else:
-        res = pending.result() if pending is not None else _run(content, extension, page0)
+        res = _in_time(page0, deadline, _run, content, extension, page0)
     if res is None:
         return form
     auto = os.environ.get("LABX_AUTO_APPROVE") == "1"
