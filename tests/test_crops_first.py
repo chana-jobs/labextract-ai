@@ -59,7 +59,7 @@ def crops_mode(monkeypatch):
                                                                                             "crop_kinds": []}})
     monkeypatch.setattr(labx_overlay, "_run", lambda *a: sent.__setitem__("full_page", sent["full_page"] + 1)
                         or {"fields": fields, "log": {"page_reads": {}}})
-    monkeypatch.setattr(labx_overlay, "_region_crops", lambda *a: [("date_line", b"d")])
+    monkeypatch.setattr(labx_overlay, "_region_crops", lambda *a: [("date_line", b"d", {})])
     return sent
 
 
@@ -102,7 +102,7 @@ from shared.contracts import ExtractionStatus, FieldName, FieldValue  # noqa: E4
 def test_central_annotation_alone_locates_the_received_date(crops_mode, monkeypatch):
     """The date is written under the central number: no stamp line is needed to stay on crops."""
     monkeypatch.setattr(labx_overlay._crops(), "handwriting_crops", lambda *a: [("handwriting", b"h")])
-    monkeypatch.setattr(labx_overlay, "_region_crops", lambda *a: [("central_annotation", b"c")])
+    monkeypatch.setattr(labx_overlay, "_region_crops", lambda *a: [("central_annotation", b"c", {})])
     local = {"regions": [dict(LINE["regions"][0], kind="central_annotation")], "form_dates": []}
     assert labx_overlay._run_crops(b"", ".pdf", 0, local)[0] == "sent" and crops_mode["full_page"] == 0
 
@@ -169,3 +169,75 @@ def test_crop_date_before_a_printed_date_is_not_accepted(monkeypatch):
     monkeypatch.setattr(engine, "_ask_all", _date_reads("10", "06"))
     e = crops.extract([("date_line", b"d")], form_dates=["16.06.2026"])["fields"]["received_date"]
     assert e["status"] == "review" and "before_form_date" in e["reason"]
+
+
+# ---------------------------------------------------------------- commitment numbers (cells the OCR could not decide)
+from shared.contracts import Commitment, Examination, Form, ProcessingStatus  # noqa: E402
+
+P07 = {"item_id": "c1", "candidates": ["25112010", "251120160", "251120180"]}     # p07: truth 251120160
+
+
+def _cell_reads(*numbers, leg="clear", image=2):
+    def reads(*_):
+        r = _read(commitment_numbers=[{"image": image, "number": n, "legibility": leg} for n in numbers[:1]])
+        r2 = _read(commitment_numbers=[{"image": image, "number": n, "legibility": leg}
+                                       for n in numbers[1:2] or numbers[:1]])
+        return [("a", r, None), ("b", r2, None)]
+    return reads
+
+
+def _cells(monkeypatch, reads):
+    monkeypatch.setattr(engine, "_ask_all", reads)
+    return crops.extract([("handwriting", b"h"), ("commitment_cell", b"c")], commitments=[P07])["commitments"]
+
+
+def test_commitment_reading_that_is_one_of_the_ocr_readings_is_accepted(monkeypatch):
+    [e] = _cells(monkeypatch, _cell_reads("251120160"))
+    assert e["status"] == "accepted" and e["value"] == "251120160" and e["item_id"] == "c1"
+
+
+def test_commitment_reading_outside_the_ocr_readings_is_not_accepted(monkeypatch):
+    [e] = _cells(monkeypatch, _cell_reads("251120166"))
+    assert e["status"] == "review" and "OCR's readings" in e["reason"]
+
+
+def test_commitment_models_disagreeing_is_not_accepted(monkeypatch):
+    [e] = _cells(monkeypatch, _cell_reads("251120160", "251120180"))
+    assert e["status"] == "review"
+
+
+def test_commitment_leading_zeros_match_the_ocr_string(monkeypatch):
+    """p04: the OCR reads the cell as 000302651707; the model may drop the zeros."""
+    monkeypatch.setattr(engine, "_ask_all", _cell_reads("302651707", image=1))
+    [e] = crops.extract([("commitment_cell", b"c")],
+                        commitments=[{"item_id": "c1", "candidates": ["00030251707", "000302651707"]}])["commitments"]
+    assert e["status"] == "accepted" and e["value"] == "000302651707"
+
+
+def test_accepted_commitment_fills_its_own_row_only():
+    nf = lambda: FieldValue(field_name=FieldName.COMMITMENT_NUMBER, extraction_status=ExtractionStatus.CONFLICT)  # noqa: E731
+    blank = lambda n: FieldValue(field_name=n, extraction_status=ExtractionStatus.MISSING)  # noqa: E731
+    exam = Examination(examination_id="f-e1", form_id="f", first_name=blank(FieldName.FIRST_NAME),
+                       last_name=blank(FieldName.LAST_NAME), israeli_id=blank(FieldName.ISRAELI_ID),
+                       sample_received_date=blank(FieldName.SAMPLE_RECEIVED_DATE), sender=blank(FieldName.SENDER),
+                       commitments=[Commitment(commitment_id="f-c1", examination_id="f-e1", number=nf()),
+                                    Commitment(commitment_id="f-c2", examination_id="f-e1", number=nf())])
+    form = Form(form_id="f", file_id="file", page_regions=[{"page": 0}], processing_status=ProcessingStatus.DONE,
+                examinations=[exam])
+    labx_overlay._REGIONS.clear()
+    res = {"fields": {f: {"value": None, "status": "missing", "reason": "", "candidates": []} for f in engine.FIELDS},
+           "commitments": [{"value": "251120160", "status": "accepted", "reason": "2 models agree",
+                            "candidates": [], "item_id": "c2"}], "log": {}}
+    import extraction.labx_overlay as ov
+    orig = ov._run_crops
+    ov._run_crops = lambda *a: ("sent", res)
+    try:
+        import os
+        os.environ["LABEXTRACT_LABX"], os.environ["LABX_MODE"] = "on", "crops_first"
+        out = ov.apply(b"", ".pdf", 0, form)
+    finally:
+        ov._run_crops = orig
+        os.environ.pop("LABX_MODE"); os.environ.pop("LABEXTRACT_LABX")
+    c1, c2 = out.examinations[0].commitments
+    assert c2.number.normalized == "251120160" and c2.number.extraction_status == ExtractionStatus.COMPLETE
+    assert c1.number.extraction_status == ExtractionStatus.CONFLICT

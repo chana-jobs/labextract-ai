@@ -131,6 +131,23 @@ def central_annotation_boxes(page: dict) -> list[list[int]]:
     return [r["bbox"] for r in f.get("regions") or [] if (r.get("quality") or {}).get("sendable")]
 
 
+def commitment_cell_boxes(page: dict) -> list[tuple[list[int], dict]]:
+    """Commitment numbers the OCR located but could not decide (conflicting re-reads of one table cell / value):
+    [(oriented bbox, {"item_id", "candidates"})] for sendable regions. The candidates are the OCR's own readings of
+    that place; a model reading is accepted only when it equals one of them (two different engines agree)."""
+    f = (page.get("fields") or {}).get("commitment_numbers") or {}
+    items = {it.get("item_key"): it for it in f.get("items") or []}
+    out = []
+    for r in f.get("regions") or []:
+        it = items.get(r.get("item_key"))
+        if not it or it.get("status") == "proposed" or not (r.get("quality") or {}).get("sendable"):
+            continue
+        cands = sorted({c["value"] for c in f.get("candidates") or [] if c.get("item") == r["item_key"] and c.get("value")})
+        if cands:
+            out.append((r["bbox"], {"item_id": it["item_id"], "candidates": cands}))
+    return out
+
+
 def printed_dates(tokens: list[dict], regions: list[list[int]]) -> list[str]:
     """Dates printed on the form (issue / print / visit), for the received-date validator: print-size date tokens
     outside the located regions (a handwritten receipt date there must not count as 'printed')."""
@@ -157,14 +174,16 @@ def _local_regions(page: dict, cache: Path) -> dict | None:
         return None
     from labextract_ocr.orient import to_source_bbox
     W, H = frame["oriented_size"]
-    found = [("date_line", b) for b in date_line_boxes(tokens)] + \
-            [("central_annotation", b) for b in central_annotation_boxes(page)]
+    found = [("date_line", b, {}) for b in date_line_boxes(tokens)] + \
+            [("central_annotation", b, {}) for b in central_annotation_boxes(page)] + \
+            [("commitment_cell", b, meta) for b, meta in commitment_cell_boxes(page)]
     if not found:
         return None
     clip = lambda b: [max(0, b[0]), max(0, b[1]), min(W - 1, b[2]), min(H - 1, b[3])]  # noqa: E731
     return {"regions": [{"kind": k, "bbox": to_source_bbox(clip(b), frame), "rotation": frame["rotation_applied"],
-                         "dpi": frame.get("dpi"), "source_size": frame["source_size"]} for k, b in found],
-            "form_dates": printed_dates(tokens, [b for _, b in found])}
+                         "dpi": frame.get("dpi"), "source_size": frame["source_size"], **meta}
+                        for k, b, meta in found],
+            "form_dates": printed_dates(tokens, [b for k, b, _ in found if k != "commitment_cell"])}
 
 
 def ocr_pages(file_id: str, content: bytes, extension: str, pages: list[int]) -> dict[int, Form]:

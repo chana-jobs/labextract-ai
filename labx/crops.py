@@ -20,10 +20,16 @@ KINDS = {
                  "receipt date, with what surrounds it",
     "central_annotation": "the lab's own handwritten note: the central number (6 digits, e.g. \"939158\"), usually "
                           "with the receipt date written under it (e.g. \"16/6/26\")",
+    "commitment_cell": "a printed commitment (התחייבות) number in a table cell or next to its label",
 }
 
+_LEG = SCHEMA["properties"]["received_date_legibility"]
 _EXTRA = {"central_number": {"type": "string"},
-          "central_number_legibility": SCHEMA["properties"]["received_date_legibility"]}
+          "central_number_legibility": _LEG,
+          "commitment_numbers": {"type": "array", "items": {
+              "type": "object", "properties": {"image": {"type": "integer"}, "number": {"type": "string"},
+                                               "legibility": _LEG},
+              "required": ["image", "number", "legibility"], "additionalProperties": False}}}
 SCHEMA_CROPS = {**SCHEMA,
                 "properties": {**{k: v for k, v in SCHEMA["properties"].items() if k != "form_dates"}, **_EXTRA},
                 "required": [k for k in SCHEMA["required"] if k != "form_dates"] + list(_EXTRA)}
@@ -51,6 +57,9 @@ image. Day, month, year exactly as written. received_date_source: "stamp" (insid
 
 CENTRAL NUMBER: only from a "central_annotation" image: the lab's handwritten number, all its digits exactly as
 written (usually 6). Not the date under it, not a phone, barcode, ID or commitment number. "" if there is none.
+
+COMMITMENT NUMBERS: one entry per "commitment_cell" image (image = its number above): the commitment number in
+that image, every digit exactly as printed, including leading zeros. [] when there is no such image.
 
 A value that is not visible in these images does not exist for you: return "" and legibility "none".
 
@@ -86,8 +95,35 @@ def handwriting_crops(content, extension, page0):
     return [("handwriting", hand.crop_region(jpeg, b, size)) for b in boxes]
 
 
-def extract(crops, readers=None, min_agree=engine.MIN_AGREE, form_dates=()):
-    """crops: [(kind, jpeg)] of one form. Returns {"fields", "log"} like engine.extract_page."""
+def _commitment(raw):
+    digits = "".join(ch for ch in raw or "" if ch.isdigit())
+    return None if "?" in (raw or "") or len(digits) < 4 else digits
+
+
+def _commitments(reads, kinds, metas, min_agree):
+    """One entry per commitment_cell crop, in order: the consensus reading, accepted only when it equals one of the
+    OCR's own readings of that place (leading zeros aside); the accepted value is the OCR's string."""
+    images = [i for i, k in enumerate(kinds, 1) if k == "commitment_cell"]
+    out = []
+    for image, meta in zip(images, metas):
+        votes = []
+        for model, r, _ in reads:
+            for c in (r or {}).get("commitment_numbers") or []:
+                if c.get("image") == image:
+                    engine._vote(votes, "crops", model, "commitment", c.get("number", ""),
+                                 c.get("legibility", "none"), _commitment)
+        e = engine.decide_field("commitment", votes, [], min_agree)
+        if e["status"] == "accepted":
+            match = [c for c in meta["candidates"] if c.lstrip("0") == e["value"].lstrip("0")]
+            e = dict(e, value=match[0]) if match else dict(
+                e, value=None, status="review", reason="crops: reading is not one of the OCR's readings of this place")
+        out.append(dict(e, item_id=meta["item_id"]))
+    return out
+
+
+def extract(crops, readers=None, min_agree=engine.MIN_AGREE, form_dates=(), commitments=()):
+    """crops: [(kind, jpeg)] of one form; commitments: [{item_id, candidates}] for its commitment_cell crops, in
+    order. Returns {"fields", "commitments", "log"} (fields like engine.extract_page, plus central_number)."""
     kinds, images = [k for k, _ in crops], [j for _, j in crops]
     reads = engine._ask_all(engine._slots(readers), prompt(kinds), images, SCHEMA_CROPS)
     votes, _ = engine.page_votes(reads)
@@ -114,4 +150,4 @@ def extract(crops, readers=None, min_agree=engine.MIN_AGREE, form_dates=()):
         fields["id"] = dict(fields["id"], value=None, status="review",
                             reason="crops: ID check digit fails (digits may be cut off at the crop edge)")
     log = {"crop_kinds": kinds, "crop_reads": {m: (r if r is not None else {"_error": e}) for m, r, e in reads}}
-    return {"fields": fields, "log": log}
+    return {"fields": fields, "commitments": _commitments(reads, kinds, list(commitments), min_agree), "log": log}
