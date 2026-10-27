@@ -1,0 +1,26 @@
+# Manual live check of a deployment from GitHub's network (synthetic scan only). Run from the Actions tab.
+name: cloud-e2e
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: Deployment URL (no trailing slash)
+        required: true
+permissions:
+  contents: read
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install openpyxl==3.1.5
+      - run: python tools/cloud_e2e.py
+        env:
+          LX_BASE_URL: ${{ inputs.url }}
+          LX_EMAIL: ${{ secrets.LX_EMAIL }}
+          LX_PASSWORD: ${{ secrets.LX_PASSWORD }}
+          VERCEL_BYPASS: ${{ secrets.VERCEL_BYPASS }}
