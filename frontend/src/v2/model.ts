@@ -119,7 +119,9 @@ export function rowStatus(form: Form, exam: Examination, c: Commitment): RowStat
     // count issue: the form is not closed. Only BLOCKING_ISSUES also block approval (server rule).
     reasons.push(BLOCKING_ISSUES.includes(issue.reason) ? `בעיה חוסמת: ${issueLabel(issue.reason)}` : `הטופס לא נסגר: ${issueLabel(issue.reason)}`);
   }
-  if (c.existence_status === "UNCERTAIN") reasons.push("קיום ההתחייבות אינו ודאי");
+  if (c.existence_status === "UNCERTAIN") {
+    reasons.push(c.number.normalized ? "קיום ההתחייבות אינו ודאי" : "מספר התחייבות לא זוהה — יש להזין מהמקור");
+  }
   if (exam.association_status === "ASSOCIATION_UNCERTAIN") reasons.push("שיוך ההתחייבות לבדיקה אינו ודאי");
 
   if (derived === "FAILED") reasons.unshift("הטופס נכשל בעיבוד");
@@ -195,9 +197,12 @@ export function buildExceptionForms(docs: DocEntry[]): FormRecord[] {
       // A technical failure is not an empty form: say so instead of "no commitments extracted".
       if (form.processing_status === "FAILED") reasons.push("כשל טכני בעיבוד — יש להזין ערכים מהמקור");
       else if (form.processing_status === "QUEUED" || form.processing_status === "RUNNING") reasons.push("העמוד עדיין לא עובד — יש להשלים את העיבוד");
-      else if (!form.examinations.some((e) => e.commitments.length > 0)) reasons.push("לא חולצו התחייבויות");
+      const hasRows = form.examinations.some((e) => e.commitments.length > 0);
+      if (!hasRows && form.processing_status === "DONE") reasons.push("לא חולצו התחייבויות");
       for (const issue of form.issues) {
         if (issue.resolution_state === "CLOSED") continue;
+        // a form with rows is reviewed in the grid: its count issue is already a reason on every row
+        if (hasRows && issue.reason === "COMMITMENT_COUNT_UNCERTAIN") continue;
         if (issue.commitment_id === null || issue.reason === "COMMITMENT_COUNT_UNCERTAIN") {
           reasons.push(issue.note ? `${issueLabel(issue.reason)}: ${issue.note}` : issueLabel(issue.reason));
         }
