@@ -25,8 +25,8 @@ from functools import lru_cache
 from pathlib import Path
 
 from shared.contracts import (
-    Attribution, Candidate, Dimensions, Evidence, ExtractionStatus, FieldValue, Form, ProcessingStatus, Readability,
-    UncertaintyReason, Verification,
+    Attribution, Candidate, Dimensions, Evidence, ExtractionStatus, FieldName, FieldValue, Form, ProcessingStatus,
+    Readability, UncertaintyReason, Verification,
 )
 
 log = logging.getLogger("labx_overlay")
@@ -134,15 +134,17 @@ def crops_first() -> bool:
     return os.environ.get("LABX_MODE", "full_page") == "crops_first"
 
 
-# date lines located in the OCR tokens (engine_select), kept until the page is merged: {(file_id, page0): [...]}
-_DATE_LINES: dict[tuple[str, int], list[dict]] = {}
+# regions located locally after the OCR (engine_select._local_regions), kept until the page is merged:
+# {(file_id, page0): {"regions": [...], "form_dates": [...]}}
+_REGIONS: dict[tuple[str, int], dict] = {}
+NO_REGIONS = {"regions": [], "form_dates": []}
 
 
-def remember_date_lines(file_id: str, page0: int, lines: list[dict]) -> None:
-    if lines:
-        _DATE_LINES[(file_id, page0)] = lines
+def remember_regions(file_id: str, page0: int, local: dict | None) -> None:
+    if local:
+        _REGIONS[(file_id, page0)] = local
     else:
-        _DATE_LINES.pop((file_id, page0), None)
+        _REGIONS.pop((file_id, page0), None)
 
 
 @lru_cache
@@ -155,48 +157,50 @@ def _crops():
 _ROTATE = {90: "ROTATE_90_CLOCKWISE", 180: "ROTATE_180", 270: "ROTATE_90_COUNTERCLOCKWISE"}
 
 
-def _date_line_crops(content: bytes, extension: str, page0: int, lines: list[dict]) -> list[tuple[str, bytes]]:
-    """Cut each located date line from the page as the OCR engine loaded it, turned upright, enlarged."""
+def _region_crops(content: bytes, extension: str, page0: int, regions: list[dict]) -> list[tuple[str, bytes]]:
+    """Cut each located region from the page as the OCR engine loaded it, turned upright, enlarged."""
     import cv2
     import numpy as np
     if extension == ".pdf":
         import pymupdf
         with pymupdf.open(stream=content, filetype="pdf") as doc:
-            png = doc[page0].get_pixmap(dpi=lines[0]["dpi"]).tobytes("png")
+            png = doc[page0].get_pixmap(dpi=regions[0]["dpi"]).tobytes("png")
         img = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR)
     else:
         img = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_COLOR)
-    W, H = lines[0]["source_size"]
+    W, H = regions[0]["source_size"]
     if (img.shape[1], img.shape[0]) != (W, H):       # an image the engine upscaled
         img = cv2.resize(img, (W, H), interpolation=cv2.INTER_CUBIC)
     out = []
-    for ln in lines:
-        x0, y0, x1, y1 = ln["bbox"]
-        c = img[max(0, y0):y1, max(0, x0):x1]
+    for r in regions:
+        x0, y0, x1, y1 = r["bbox"]
+        if r["kind"] == "central_annotation":       # a tight ink block: keep a margin so no digit is cut
+            mx, my = (x1 - x0) // 8 + 10, (y1 - y0) // 8 + 10
+            x0, y0, x1, y1 = x0 - mx, y0 - my, x1 + mx, y1 + my
+        c = img[max(0, y0):max(0, y1), max(0, x0):max(0, x1)]
         if c.size == 0:
             continue
-        if ln["rotation"] in _ROTATE:
-            c = cv2.rotate(c, getattr(cv2, _ROTATE[ln["rotation"]]))
+        if r["rotation"] in _ROTATE:
+            c = cv2.rotate(c, getattr(cv2, _ROTATE[r["rotation"]]))
         f = max(1.0, 900 / max(c.shape[:2]))
         c = cv2.resize(c, None, fx=f, fy=f, interpolation=cv2.INTER_CUBIC)
-        out.append(("date_line", cv2.imencode(".jpg", c, [cv2.IMWRITE_JPEG_QUALITY, 92])[1].tobytes()))
+        out.append((r["kind"], cv2.imencode(".jpg", c, [cv2.IMWRITE_JPEG_QUALITY, 92])[1].tobytes()))
     return out
 
 
-def _run_crops(content: bytes, extension: str, page0: int, lines: list[dict]):
+def _run_crops(content: bytes, extension: str, page0: int, local: dict):
     """("sent", result or None on failure) or ("escalate", reason) when a field could not be located locally.
-    A technical failure never escalates to the full page: the form is kept as it is, as on the full-page path."""
+    The received date is located by a stamp date line or by the lab's handwritten annotation (the date is written
+    under the central number). A technical failure never escalates to the full page: the form is kept as it is."""
     t0 = time.monotonic()
     try:
         hand = _crops().handwriting_crops(content, extension, page0)
         if not hand:
             return "escalate", "no handwriting located"
-        if not lines:
-            return "escalate", "no date line located"
-        date = _date_line_crops(content, extension, page0, lines)
-        if not date:
-            return "escalate", "date line outside the page"
-        res = _crops().extract(hand + date)
+        regions = _region_crops(content, extension, page0, local["regions"]) if local["regions"] else []
+        if not regions:
+            return "escalate", "no received-date region located"
+        res = _crops().extract(hand + regions, form_dates=local["form_dates"])
     except Exception as exc:
         _report(page0, time.monotonic() - t0, None, f"{type(exc).__name__}: {str(exc)[:300]}")
         return "sent", None
@@ -246,7 +250,7 @@ def start(content: bytes, extension: str, page0: int) -> Future | None:
 
 def apply(content: bytes, extension: str, page0: int, form: Form, pending: Future | None = None) -> Form:
     """Merge the labx result into the page form. `pending` = a reading already started with start()."""
-    lines = _DATE_LINES.pop((form.file_id, page0), [])
+    local = _REGIONS.pop((form.file_id, page0), None) or NO_REGIONS
     if not enabled() or form.processing_status != ProcessingStatus.DONE or not form.examinations:
         return form
     exam = form.examinations[0]
@@ -255,7 +259,7 @@ def apply(content: bytes, extension: str, page0: int, form: Form, pending: Futur
         return form                       # text-layer page already read all four exactly: save model quota
     res = None
     if crops_first() and pending is None:
-        outcome, res = _run_crops(content, extension, page0, lines)
+        outcome, res = _run_crops(content, extension, page0, local)
         if outcome == "escalate":
             print(f"[labx] page={page0 + 1} sent=full_page ({res})", flush=True)
             res = _run(content, extension, page0)
@@ -268,4 +272,16 @@ def apply(content: bytes, extension: str, page0: int, form: Form, pending: Futur
     exam = form.examinations[0]
     for field, name in FIELDS.items():
         setattr(exam, name, _merge(getattr(exam, name), field, res["fields"][field], page0, auto))
+    if "central_number" in res["fields"]:           # crops-first only: the lab's handwritten central number
+        exam.central_numbers = _merge_central(exam.central_numbers, res["fields"]["central_number"], page0, auto)
     return Form.model_validate(form.model_dump())
+
+
+def _merge_central(old: list[FieldValue], entry: dict, page0: int, auto: bool) -> list[FieldValue]:
+    """A central number the OCR already read (COMPLETE) is never touched. Otherwise the labx entry is merged into the
+    first central FieldValue with the ID / date rules: accepted -> COMPLETE (PENDING), readings -> candidates."""
+    if any(fv.extraction_status == ExtractionStatus.COMPLETE for fv in old):
+        return old
+    base = old[0] if old else FieldValue(field_name=FieldName.CENTRAL_NUMBERS, extraction_status=ExtractionStatus.MISSING)
+    merged = _merge(base, "central_number", entry, page0, auto)
+    return old if merged is base else [merged] + list(old[1:])
