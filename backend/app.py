@@ -25,8 +25,10 @@ from backend.drafts import router as drafts_router
 from backend.review import router as review_router
 from backend.fields import router as fields_router
 from backend.saved_export import router as saved_export_router
+from backend.switches import load_switches
 
 check_deployment_config()
+load_switches()
 
 _production = bool(os.environ.get("VERCEL")) or os.environ.get("LABEXTRACT_ENV") == "production"
 app = FastAPI(
