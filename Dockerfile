@@ -43,6 +43,7 @@ ENV PYTHONUNBUFFERED=1 \
     LABX_EXTRA_ENV_FILE=/nonexistent \
     LABX_GEMINI_TIMEOUT_MS=30000 \
     LABX_SLOT_BUDGET_S=45 \
+    LABX_PAGE_BUDGET_S=150 \
     PORT=7860
 EXPOSE 7860
 CMD ["sh", "-c", "uvicorn backend.container:app --host 0.0.0.0 --port ${PORT} --proxy-headers --forwarded-allow-ips='*'"]

@@ -241,3 +241,22 @@ def test_accepted_commitment_fills_its_own_row_only():
     c1, c2 = out.examinations[0].commitments
     assert c2.number.normalized == "251120160" and c2.number.extraction_status == ExtractionStatus.COMPLETE
     assert c1.number.extraction_status == ExtractionStatus.CONFLICT
+
+
+def test_a_hanging_model_stage_gives_up_and_keeps_the_ocr_form(monkeypatch):
+    """27.10: a page hung after the OCR until Vercel's 300 s limit. With a page budget the form comes back as the
+    OCR read it instead of the request being killed."""
+    import time as _t
+    monkeypatch.setenv("LABX_MODE", "crops_first")
+    monkeypatch.setenv("LABEXTRACT_LABX", "on")
+    monkeypatch.setattr(labx_overlay, "PAGE_BUDGET_S", 0.2)
+    monkeypatch.setattr(labx_overlay, "_run_crops", lambda *a: _t.sleep(2) or ("sent", None))
+    blank = lambda n: FieldValue(field_name=n, extraction_status=ExtractionStatus.MISSING)  # noqa: E731
+    exam = Examination(examination_id="f-e1", form_id="f", first_name=blank(FieldName.FIRST_NAME),
+                       last_name=blank(FieldName.LAST_NAME), israeli_id=blank(FieldName.ISRAELI_ID),
+                       sample_received_date=blank(FieldName.SAMPLE_RECEIVED_DATE), sender=blank(FieldName.SENDER))
+    form = Form(form_id="f", file_id="file", page_regions=[{"page": 0}], processing_status=ProcessingStatus.DONE,
+                examinations=[exam])
+    t0 = _t.monotonic()
+    assert labx_overlay.apply(b"", ".pdf", 0, form) is form
+    assert _t.monotonic() - t0 < 1.5
