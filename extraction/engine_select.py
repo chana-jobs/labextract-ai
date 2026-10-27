@@ -119,22 +119,52 @@ def date_line_boxes(tokens: list[dict]) -> list[list[int]]:
     return out
 
 
-def _date_lines(page: dict, cache: Path) -> list[dict]:
-    """[{bbox, rotation, dpi, source_size}] for one OCR result page: bbox in the pixels of the page as the engine
-    loaded it (a PDF at `dpi`; an image possibly upscaled to `source_size`); [] when nothing was located."""
+PRINTED_DATE = re.compile(r"\d{1,2}[/.]\d{1,2}[/.](\d{4}|\d{2})")
+
+
+def central_annotation_boxes(page: dict) -> list[list[int]]:
+    """Oriented-frame boxes of the lab's handwritten annotation (central number, usually with the received date
+    under it) that the OCR engine located but could not read and marked sendable. Part 1: 7/8 handwritten centrals."""
+    f = (page.get("fields") or {}).get("central_numbers") or {}
+    if f.get("status") == "proposed":
+        return []
+    return [r["bbox"] for r in f.get("regions") or [] if (r.get("quality") or {}).get("sendable")]
+
+
+def printed_dates(tokens: list[dict], regions: list[list[int]]) -> list[str]:
+    """Dates printed on the form (issue / print / visit), for the received-date validator: print-size date tokens
+    outside the located regions (a handwritten receipt date there must not count as 'printed')."""
+    if not tokens:
+        return []
+    med = statistics.median(t["bbox"][3] - t["bbox"][1] for t in tokens)
+    inside = lambda b: any(r[0] <= (b[0] + b[2]) / 2 <= r[2] and r[1] <= (b[1] + b[3]) / 2 <= r[3] for r in regions)  # noqa: E731
+    return [t["text"].strip() for t in tokens
+            if PRINTED_DATE.fullmatch(t["text"].strip()) and t["bbox"][3] - t["bbox"][1] <= TALL_YEAR * med
+            and not inside(t["bbox"])]
+
+
+def _local_regions(page: dict, cache: Path) -> dict | None:
+    """What the crops-first path may send for one OCR result page, located without a model:
+    {"regions": [{kind, bbox, rotation, dpi, source_size}], "form_dates": [...]}; None when nothing was located.
+    bbox is in the pixels of the page as the engine loaded it (a PDF at `dpi`; an image maybe upscaled)."""
     key = (page.get("ocr") or {}).get("cache_key")
     frame = page.get("frame")
     if page.get("processing_status") != "DONE" or not key or not frame:
-        return []
+        return None
     try:
         tokens = json.loads((cache / f"{key}.json").read_text(encoding="utf-8"))["tokens"]
     except (OSError, ValueError, KeyError):
-        return []
+        return None
     from labextract_ocr.orient import to_source_bbox
     W, H = frame["oriented_size"]
-    return [{"bbox": to_source_bbox([max(0, b[0]), max(0, b[1]), min(W - 1, b[2]), min(H - 1, b[3])], frame),
-             "rotation": frame["rotation_applied"], "dpi": frame.get("dpi"), "source_size": frame["source_size"]}
-            for b in date_line_boxes(tokens)]
+    found = [("date_line", b) for b in date_line_boxes(tokens)] + \
+            [("central_annotation", b) for b in central_annotation_boxes(page)]
+    if not found:
+        return None
+    clip = lambda b: [max(0, b[0]), max(0, b[1]), min(W - 1, b[2]), min(H - 1, b[3])]  # noqa: E731
+    return {"regions": [{"kind": k, "bbox": to_source_bbox(clip(b), frame), "rotation": frame["rotation_applied"],
+                         "dpi": frame.get("dpi"), "source_size": frame["source_size"]} for k, b in found],
+            "form_dates": printed_dates(tokens, [b for _, b in found])}
 
 
 def ocr_pages(file_id: str, content: bytes, extension: str, pages: list[int]) -> dict[int, Form]:
@@ -151,8 +181,8 @@ def ocr_pages(file_id: str, content: bytes, extension: str, pages: list[int]) ->
         path.write_bytes(content)
         try:
             result = engine.extract_file(path, [p + 1 for p in pages] if extension == ".pdf" else None)
-            for page in result["pages"]:        # the token cache is emptied below: locate the date line now
-                labx_overlay.remember_date_lines(file_id, page["page"] - 1, _date_lines(page, cache))
+            for page in result["pages"]:        # the token cache is emptied below: locate the regions now
+                labx_overlay.remember_regions(file_id, page["page"] - 1, _local_regions(page, cache))
         finally:
             _clear(cache)
         print(f"[ocr] pages={[p + 1 for p in pages]} waited_for_lock={t_ocr - t_wait:.1f}s "
