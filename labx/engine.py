@@ -22,7 +22,10 @@ from .prompt import PROMPT, SCHEMA
 # No model appears in both slots, so an accepted value always rests on two DIFFERENT models.
 DEFAULT_SLOTS = [
     ["gemini:gemini-3.5-flash", "gemini:gemini-3.7-flash", "gemini:gemini-3.5-flash-lite"],
-    ["gemini:gemini-3.6-flash", "gemini:gemini-3.8-flash", "gemini:gemini-3-flash-preview", "gemini:gemini-flash-latest"],
+    ["gemini:gemini-3.6-flash", "gemini:gemini-3.8-flash", "gemini:gemini-3-flash-preview", "gemini:gemini-flash-latest",
+     # 27.10: a free model with its own daily quota, so the second reader still answers when the others are used up
+     # (part 2 ran on one reader only). Not "gemini-flash-lite-latest": an alias that may be slot 1's own model.
+     "gemini:gemini-3.1-flash-lite"],
 ]
 DEFAULT_READERS = [s[0] for s in DEFAULT_SLOTS]
 MIN_AGREE = 2
