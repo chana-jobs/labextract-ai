@@ -43,9 +43,13 @@ def _clean(value):
 
 def _gemini_keys():
     """GEMINI_API_KEY, GEMINI_API_KEY_2, _3, _4 ... (any number), duplicates removed, in order.
-    LABX_EXCLUDE_KEYS="GEMINI_API_KEY_8,..." keeps keys out of this process (e.g. reserved for a live demo)."""
+    LABX_EXCLUDE_KEYS="GEMINI_API_KEY_3,..." keeps keys out of this process (e.g. reserved for a live demo).
+    Paid keys (LABX_PAID_KEYS, default GEMINI_API_KEY_8 - billed per token) are left out unless LABX_USE_PAID_KEYS=1:
+    for urgent use only, never by default in evaluation runs or on the server."""
     import re
     excluded = {x.strip() for x in os.environ.get("LABX_EXCLUDE_KEYS", "").split(",") if x.strip()}
+    if os.environ.get("LABX_USE_PAID_KEYS") != "1":
+        excluded |= {x.strip() for x in os.environ.get("LABX_PAID_KEYS", "GEMINI_API_KEY_8").split(",") if x.strip()}
     reserved_values = {_clean(ENV.get(k)) for k in excluded}
     names = sorted((k for k in ENV if re.fullmatch(r"GEMINI_API_KEY(_\d+)?", k) and k not in excluded
                     and _clean(ENV.get(k)) not in reserved_values),
