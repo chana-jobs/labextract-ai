@@ -144,6 +144,11 @@ def hand_votes(regions):
     return votes
 
 
+def is_lite(model):
+    """A "lite" model: cheaper and weaker; two of them agree on the same misreading too often to accept alone."""
+    return "lite" in model.split(":")[-1]
+
+
 def _id_votes(vs):
     """Leading zeros are padding, not a different ID ("0011223344" = "11223344"). A crop / handwriting reading that
     is a cut-off piece of a whole-page reading (the crop edge cut digits: "1223344" inside "11223344") is no
@@ -177,6 +182,11 @@ def decide_field(field, votes, form_dates, min_agree=MIN_AGREE, today=None):
         # measured on the dev set: two different models agreed on the same INVENTED name (0 correct, 2 wrong)
         # the agreed value is offered as a proposal; a person approves or corrects it
         entry.update(status="review", reason="names always go to human review (models invent names)", proposed=value)
+        return entry
+    if not any(not is_lite(m) for m in clear_models):
+        # 27.10, part 1 with the main models' quota used up: two lite models agreed on 3 WRONG values (a faded stamp
+        # day, a misread date, a central number). Their agreement only proposes; a full model must be among them.
+        entry.update(status="review", reason="only lite models agree")
         return entry
     if field == "received_date":
         ok, why = validate.date_plausible(dt.date.fromisoformat(value), form_dates, today)

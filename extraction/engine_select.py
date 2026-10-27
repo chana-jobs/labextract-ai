@@ -120,6 +120,10 @@ def date_line_boxes(tokens: list[dict]) -> list[list[int]]:
 
 
 PRINTED_DATE = re.compile(r"\d{1,2}[/.]\d{1,2}[/.](\d{4}|\d{2})")
+# the top of the upright page: the sending institution's logo / letterhead. The OCR alone cannot tell the sender from
+# the patient's health fund printed on the form (part 2: 6/6 wrong senders were the patient's fund), a reader of the
+# letterhead can (labx_overlay._decide_sender)
+LETTERHEAD_SHARE = 0.22
 
 
 def central_annotation_boxes(page: dict) -> list[list[int]]:
@@ -258,7 +262,8 @@ def _local_regions(page: dict, cache: Path) -> dict | None:
     found = [("date_line", b, {}) for b in date_line_boxes(tokens)] + \
             [("central_annotation", b, {}) for b in central_annotation_boxes(page)] + \
             [("commitment_cell", b, meta) for b, meta in commitment_cell_boxes(page)] + \
-            [("confirm_value", b, meta) for b, meta in confirm_value_boxes(page)]
+            [("confirm_value", b, meta) for b, meta in confirm_value_boxes(page)] + \
+            [("letterhead", [0, 0, W - 1, int(H * LETTERHEAD_SHARE)], {})]
     numbers = labeled_numbers(tokens)
     if not found:
         return {"regions": [], "form_dates": [], "labeled_numbers": numbers} if numbers else None
