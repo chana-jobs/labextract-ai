@@ -377,6 +377,17 @@ export async function approveField(
   return { approved: raw.approved, approval_status: approvalStatus, version: raw.field?.version ?? version };
 }
 
+/**
+ * The reviewer confirms the form has exactly these commitment rows: closes "commitment count uncertain" and marks
+ * the rows' existence confirmed (without it such a row can never become READY). Field values are not touched.
+ *
+ * Backend endpoint: POST /review/:fileId/:formId/commitments/confirm   (409 when the rows changed meanwhile)
+ */
+export async function confirmCommitments(fileId: string, formId: string, commitmentCount: number): Promise<void> {
+  if (USE_MOCK) return;
+  await request("POST", `/review/${fileId}/${formId}/commitments/confirm`, { commitment_count: commitmentCount });
+}
+
 // ----------------------------------------------------------------- helpers
 
 function buildTarget(

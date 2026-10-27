@@ -22,7 +22,9 @@ from backend.review import (
     _norm, _rebuild,
 )
 from backend.storage import Repository, VersionConflict, get_repository, validate_file_id
-from shared.contracts import ApprovalStatus, Examination, FieldName, FieldValue, Form, ResolutionState
+from shared.contracts import (
+    ApprovalStatus, Examination, ExistenceStatus, FieldName, FieldValue, Form, IssueReason, ResolutionState,
+)
 
 router = APIRouter(prefix="/review", tags=["Review"])
 
@@ -247,3 +249,28 @@ def approve_field(file_id: str, form_id: str, data: FieldApproval,
     approved = old.model_copy(update={"approval_status": ApprovalStatus.HUMAN_APPROVED, "version": old.version + 1})
     slot.put(approved)
     return _response(_store(repo, workspace_id, file_id, forms, form, drafts_version), approved, True, approved=True)
+
+
+# ------------------------------------------------------------------ the reviewer confirms the commitment rows
+class CommitmentCountConfirmation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    commitment_count: int                    # the rows the reviewer looked at; a stale screen gets a 409
+
+
+@router.post("/{file_id}/{form_id}/commitments/confirm")
+def confirm_commitments(file_id: str, form_id: str, data: CommitmentCountConfirmation,
+                        repo: Repository = Depends(get_repository), workspace_id: str = Depends(current_workspace)):
+    """The reviewer looked at the source and states: the form has exactly these commitment rows. Closes the
+    'commitment count uncertain' issue and marks every row's existence confirmed - a decision only a person makes;
+    the screen had no way to make it, so such a row could never become READY. Field values are not touched."""
+    forms, form, drafts_version = _load(repo, workspace_id, file_id, form_id)
+    exam = form.examinations[0]
+    if len(exam.commitments) != data.commitment_count:
+        _fail(409, "COMMITMENT_COUNT_CHANGED", server_count=len(exam.commitments))
+    if not exam.commitments:
+        _fail(422, "NO_COMMITMENT_ROWS")
+    form = form.model_copy(update={"issues": [i for i in form.issues
+                                              if i.reason != IssueReason.COMMITMENT_COUNT_UNCERTAIN]})
+    form.examinations[0] = exam.model_copy(update={"commitments": [
+        c.model_copy(update={"existence_status": ExistenceStatus.CONFIRMED}) for c in exam.commitments]})
+    return _response(_store(repo, workspace_id, file_id, forms, form, drafts_version), None, True)
