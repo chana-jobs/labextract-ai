@@ -48,21 +48,23 @@ def same_sender(got, want):
 
 
 def score(form, t):
-    """{field: [(mark, ...)]}: one mark per accepted value or per field, never the value itself."""
+    """{field: [mark, ...]}: one mark per value (✓ filled correct, ✗ filled WRONG, ? for review with a proposed
+    reading / candidate, · nothing found), never the value itself. Filled values are still PENDING human approval."""
     exam = form.examinations[0] if form.examinations else None
     out = defaultdict(list)
     if exam is None:
         return out
     done = lambda fv: fv.extraction_status.value == COMPLETE and fv.normalized  # noqa: E731
+    open_ = lambda fv: "?" if (fv.normalized or fv.raw or fv.candidates) else "·"  # noqa: E731
     for field, fv, want in (("id", exam.israeli_id, t["id"]), ("date", exam.sample_received_date, t["date"]),
                             ("sender", exam.sender, t["sender"])):
         got = (fv.normalized.lstrip("0") if field == "id" else fv.normalized) if done(fv) else None
         ok = got is not None and (same_sender(got, want) if field == "sender" else got == want)
-        out[field].append("·" if got is None else ("✓" if ok else "✗"))
+        out[field].append(open_(fv) if got is None else ("✓" if ok else "✗"))
     for field, fvs, want in (("central", exam.central_numbers, t["central"]),
                              ("commitment", [c.number for c in exam.commitments], t["commitment"])):
         for fv in fvs:
-            out[field].append("✓" if done(fv) and fv.normalized.lstrip("0") in want else ("✗" if done(fv) else "·"))
+            out[field].append("✓" if done(fv) and fv.normalized.lstrip("0") in want else ("✗" if done(fv) else open_(fv)))
         if not fvs:
             out[field].append("·")
     for field, fv in (("first_name", exam.first_name), ("last_name", exam.last_name)):
@@ -111,10 +113,12 @@ def summary(mode, r):
     for marks in r["per_page"].values():
         for f, ms in marks.items():
             tot[f].update(ms)
-    lines = [f"## {mode}", "", "| field | accepted correct | accepted WRONG | not accepted |", "|---|---|---|---|"]
+    lines = [f"## {mode}", "", "filled = value entered and locked, PENDING human approval (no auto-approval)", "",
+             "| field | filled correct | filled WRONG | review (a reading proposed) | nothing found |",
+             "|---|---|---|---|---|"]
     for f in ("id", "date", "central", "commitment", "sender"):
         c = tot[f]
-        lines.append(f"| {f} | {c['✓']} | **{c['✗']}** | {c['·']} |")
+        lines.append(f"| {f} | {c['✓']} | **{c['✗']}** | {c['?']} | {c['·']} |")
     for f in ("first_name", "last_name"):
         lines.append(f"| {f} | proposals: {tot[f]['proposal']} | (never accepted) | {tot[f]['·']} |")
     lines += ["", f"- pages sent as crops only: {r['sent'].get('crops_only', 0)}, full page: {r['sent'].get('full_page', 0)}",
