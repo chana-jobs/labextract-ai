@@ -27,7 +27,7 @@ import time
 from functools import lru_cache
 from pathlib import Path
 
-from extraction import labx_overlay, pdf_text
+from extraction import confirm, labx_overlay, pdf_text
 from shared.contracts import (Commitment, ExistenceStatus, ExtractionStatus, FieldName, FieldValue, Form, Issue,
                               IssueReason, ProcessingStatus, SplitStatus, UncertaintyReason)
 
@@ -148,6 +148,32 @@ def commitment_cell_boxes(page: dict) -> list[tuple[list[int], dict]]:
     return out
 
 
+def confirm_value_boxes(page: dict) -> list[tuple[list[int], dict]]:
+    """Numbers the OCR proposed alone (central numbers, commitment numbers), with the box it read each from:
+    [(oriented bbox, {"target", "value", "item_id"?})]. Their crops ask a second reader for the same value
+    (extraction/confirm.py); the OCR's decision is never changed by them, only confirmed or flagged."""
+    F = page.get("fields") or {}
+    out = []
+
+    def box(f, value, item=None):
+        return next((c["bbox"] for c in f.get("candidates") or []
+                     if c.get("value") == value and (item is None or c.get("item") == item) and c.get("bbox")), None)
+
+    cen = F.get("central_numbers") or {}
+    if cen.get("status") == "proposed":
+        out += [(b, {"target": "central", "value": v}) for v in cen.get("values") or [] if (b := box(cen, v))]
+    com = F.get("commitment_numbers") or {}
+    for it in com.get("items") or []:
+        if it.get("status") == "proposed" and (b := box(com, it["value"], it.get("item_key"))):
+            out.append((b, {"target": "commitment", "value": it["value"], "item_id": it["item_id"]}))
+    if not com.get("items") and com.get("status") == "proposed":
+        out += [(b, {"target": "commitment", "value": v, "item_id": f"c{i + 1}"})
+                for i, v in enumerate(com.get("values") or []) if (b := box(com, v))]
+    # never the sender: a crop confirms the name's text, not that it is the SENDER - part 2 p13: the OCR proposed
+    # "מכבי" (the patient's fund, printed on the form); a second reader would read and confirm the same word
+    return out
+
+
 def printed_dates(tokens: list[dict], regions: list[list[int]]) -> list[str]:
     """Dates printed on the form (issue / print / visit), for the received-date validator: print-size date tokens
     outside the located regions (a handwritten receipt date there must not count as 'printed')."""
@@ -192,7 +218,8 @@ def _local_regions(page: dict, cache: Path) -> dict | None:
     W, H = frame["oriented_size"]
     found = [("date_line", b, {}) for b in date_line_boxes(tokens)] + \
             [("central_annotation", b, {}) for b in central_annotation_boxes(page)] + \
-            [("commitment_cell", b, meta) for b, meta in commitment_cell_boxes(page)]
+            [("commitment_cell", b, meta) for b, meta in commitment_cell_boxes(page)] + \
+            [("confirm_value", b, meta) for b, meta in confirm_value_boxes(page)]
     numbers = labeled_numbers(tokens)
     if not found:
         return {"regions": [], "form_dates": [], "labeled_numbers": numbers} if numbers else None
@@ -200,7 +227,7 @@ def _local_regions(page: dict, cache: Path) -> dict | None:
     return {"regions": [{"kind": k, "bbox": to_source_bbox(clip(b), frame), "rotation": frame["rotation_applied"],
                          "dpi": frame.get("dpi"), "source_size": frame["source_size"], **meta}
                         for k, b, meta in found],
-            "form_dates": printed_dates(tokens, [b for k, b, _ in found if k != "commitment_cell"]),
+            "form_dates": printed_dates(tokens, [b for k, b, _ in found if k in ("date_line", "central_annotation")]),
             "labeled_numbers": numbers}
 
 
@@ -227,7 +254,8 @@ def ocr_pages(file_id: str, content: bytes, extension: str, pages: list[int]) ->
     forms = {}
     for page in result["pages"]:
         form = page_to_form(file_id, page, result["engine_version"])
-        forms[page["page"] - 1] = Form.model_validate(form.model_dump(mode="json"))
+        form = Form.model_validate(form.model_dump(mode="json"))
+        forms[page["page"] - 1] = confirm.with_barcodes(form, page.get("barcodes"), page["page"] - 1)
     for p in pages:     # a page the engine did not return is a technical failure, not an empty page
         forms.setdefault(p, _failed_form(file_id, p, "OCR returned no result for this page"))
     return forms

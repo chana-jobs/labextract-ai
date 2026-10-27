@@ -25,3 +25,11 @@ def test_environment_wins(monkeypatch):
 
 def test_the_committed_switch_is_readable():
     assert switches.AUTO_APPROVE_FILE.is_file()
+
+
+def test_crops_first_switch_is_off_by_default_in_the_repo(monkeypatch):
+    monkeypatch.delenv("LABX_MODE", raising=False)
+    switches.load_switches()
+    import os
+    assert os.environ["LABX_MODE"] == ("crops_first" if switches.auto_approve_from_file(switches.CROPS_FIRST_FILE)
+                                       else "full_page")
