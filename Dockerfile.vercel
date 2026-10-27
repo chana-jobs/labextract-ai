@@ -41,6 +41,8 @@ ENV PYTHONUNBUFFERED=1 \
     LABX_TESSERACT=/usr/bin/tesseract \
     LABX_CACHE_DIR=/tmp/labx_cache \
     LABX_EXTRA_ENV_FILE=/nonexistent \
+    LABX_GEMINI_TIMEOUT_MS=30000 \
+    LABX_SLOT_BUDGET_S=45 \
     PORT=7860
 EXPOSE 7860
 CMD ["sh", "-c", "uvicorn backend.container:app --host 0.0.0.0 --port ${PORT} --proxy-headers --forwarded-allow-ips='*'"]
