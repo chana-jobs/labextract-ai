@@ -90,6 +90,27 @@ def _name_proposal(old: FieldValue, entry: dict, page0: int) -> FieldValue:
                       candidates=list(old.candidates) + cands, evidence=list(old.evidence) + [_evidence(page0, note)])
 
 
+def _one_digit_apart(a: str, b: str) -> bool:
+    """Equal, or one digit changed / dropped / added (the OCR may misread one digit of a printed number)."""
+    if a == b:
+        return True
+    if len(a) == len(b):
+        return sum(x != y for x, y in zip(a, b)) == 1
+    short, long_ = sorted((a, b), key=len)
+    return len(long_) - len(short) == 1 and any(long_[:i] + long_[i + 1:] == short for i in range(len(long_)))
+
+
+def _id_is_labeled_number(entry: dict, labeled: list[str]) -> dict:
+    """An accepted ID that is (up to one digit) a number the OCR read beside a non-ID label - a case / sample /
+    request number - goes to review: the models may have taken that number for the ID. Its check digit can be
+    valid by chance (part 1 p7: the case number, accepted by two models, wrong)."""
+    value = (entry.get("value") or "").lstrip("0")
+    if entry["status"] != "accepted" or not any(_one_digit_apart(value, n.lstrip("0")) for n in labeled):
+        return entry
+    return dict(entry, value=None, status="review", readings=[entry["value"]],
+                reason="the same number is printed beside a case / sample / request label")
+
+
 def _merge(old: FieldValue, field: str, entry: dict, page0: int, auto: bool) -> FieldValue:
     name = old.field_name
     if entry["status"] == "accepted":
@@ -137,7 +158,7 @@ def crops_first() -> bool:
 # regions located locally after the OCR (engine_select._local_regions), kept until the page is merged:
 # {(file_id, page0): {"regions": [...], "form_dates": [...]}}
 _REGIONS: dict[tuple[str, int], dict] = {}
-NO_REGIONS = {"regions": [], "form_dates": []}
+NO_REGIONS = {"regions": [], "form_dates": [], "labeled_numbers": []}
 
 
 def remember_regions(file_id: str, page0: int, local: dict | None) -> None:
@@ -276,8 +297,9 @@ def apply(content: bytes, extension: str, page0: int, form: Form, pending: Futur
     auto = os.environ.get("LABX_AUTO_APPROVE") == "1"
     form = form.model_copy(deep=True)
     exam = form.examinations[0]
+    fields = dict(res["fields"], id=_id_is_labeled_number(res["fields"]["id"], local.get("labeled_numbers", [])))
     for field, name in FIELDS.items():
-        setattr(exam, name, _merge(getattr(exam, name), field, res["fields"][field], page0, auto))
+        setattr(exam, name, _merge(getattr(exam, name), field, fields[field], page0, auto))
     if "central_number" in res["fields"]:           # crops-first only: the lab's handwritten central number
         exam.central_numbers = _merge_central(exam.central_numbers, res["fields"]["central_number"], page0, auto)
     by_id = {c.commitment_id: c for c in exam.commitments}

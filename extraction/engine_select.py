@@ -160,9 +160,25 @@ def printed_dates(tokens: list[dict], regions: list[list[int]]) -> list[str]:
             and not inside(t["bbox"])]
 
 
+# printed words naming a number that is NOT the patient's ID (case / sample / request / order / phone / zip code)
+OTHER_NUMBER_LABEL = re.compile(r"מקרה|דגימה|התחייבות|הזמנה|בקשה|אסמכתא|טלפון|טל[.:]|פקס|מיקוד|ברקוד")
+LONG_NUMBER = re.compile(r"\d{6,}")
+
+
+def labeled_numbers(tokens: list[dict]) -> list[str]:
+    """Numbers (6+ digits) the OCR read on the same line as a non-ID label, e.g. the case number beside "מקרה".
+    A model may take such a number for the patient's ID. Part 1 p7: two models agreed on the case number as the ID;
+    the OCR read it with one digit dropped, so the comparison (labx_overlay) allows one digit of difference."""
+    labels = [t["bbox"] for t in tokens if OTHER_NUMBER_LABEL.search(t["text"])]
+    same_line = lambda a, b: min(a[3], b[3]) - max(a[1], b[1]) >= min(a[3] - a[1], b[3] - b[1]) / 2  # noqa: E731
+    return [n for t in tokens if any(same_line(t["bbox"], b) for b in labels)
+            for n in LONG_NUMBER.findall(re.sub(r"[\s\-]", "", t["text"]))]
+
+
 def _local_regions(page: dict, cache: Path) -> dict | None:
     """What the crops-first path may send for one OCR result page, located without a model:
-    {"regions": [{kind, bbox, rotation, dpi, source_size}], "form_dates": [...]}; None when nothing was located.
+    {"regions": [{kind, bbox, rotation, dpi, source_size}], "form_dates": [...], "labeled_numbers": [...]};
+    None when nothing was located.
     bbox is in the pixels of the page as the engine loaded it (a PDF at `dpi`; an image maybe upscaled)."""
     key = (page.get("ocr") or {}).get("cache_key")
     frame = page.get("frame")
@@ -177,13 +193,15 @@ def _local_regions(page: dict, cache: Path) -> dict | None:
     found = [("date_line", b, {}) for b in date_line_boxes(tokens)] + \
             [("central_annotation", b, {}) for b in central_annotation_boxes(page)] + \
             [("commitment_cell", b, meta) for b, meta in commitment_cell_boxes(page)]
+    numbers = labeled_numbers(tokens)
     if not found:
-        return None
+        return {"regions": [], "form_dates": [], "labeled_numbers": numbers} if numbers else None
     clip = lambda b: [max(0, b[0]), max(0, b[1]), min(W - 1, b[2]), min(H - 1, b[3])]  # noqa: E731
     return {"regions": [{"kind": k, "bbox": to_source_bbox(clip(b), frame), "rotation": frame["rotation_applied"],
                          "dpi": frame.get("dpi"), "source_size": frame["source_size"], **meta}
                         for k, b, meta in found],
-            "form_dates": printed_dates(tokens, [b for k, b, _ in found if k != "commitment_cell"])}
+            "form_dates": printed_dates(tokens, [b for k, b, _ in found if k != "commitment_cell"]),
+            "labeled_numbers": numbers}
 
 
 def ocr_pages(file_id: str, content: bytes, extension: str, pages: list[int]) -> dict[int, Form]:
