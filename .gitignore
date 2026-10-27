@@ -9,3 +9,6 @@ __pycache__/
 # private specification documents: never published
 /Kiro_Endpoint_Mapping_2026-10-19.md
 /LabExtract_AI_Specification_v3.2_EN.md
+
+# local measurement results (tools/measure_privacy.py)
+out_measure/
