@@ -11,7 +11,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, approveField, downloadExcel, getExportSummary, saveField } from "../api/client";
+import { ApiError, approveField, confirmCommitments, downloadExcel, getExportSummary, saveField } from "../api/client";
 import type { ExportSummary, FieldName } from "../types/contracts";
 import SourceViewer, { type FieldApproveRequest } from "../components/SourceViewer";
 import UploadModal from "../components/UploadModal";
@@ -247,6 +247,29 @@ export default function ReviewWorkspaceV2() {
         try { await data.refreshDoc(selectedRow.doc.file_id); } catch { /* keep the message */ }
       }
       return false;
+    } finally {
+      if (live()) setApproving(false);
+    }
+  }, [selectedRow, data, live]);
+
+  // the form's commitment rows still need a person to confirm them (count uncertain / a row's existence uncertain)
+  const countOpen = !!selectedRow && (
+    selectedRow.form.issues.some((i) => i.reason === "COMMITMENT_COUNT_UNCERTAIN" && i.resolution_state !== "CLOSED")
+    || selectedRow.exam.commitments.some((c) => c.existence_status === "UNCERTAIN"));
+
+  const handleConfirmCommitments = useCallback(async () => {
+    if (!selectedRow) return;
+    setApproving(true);
+    try {
+      await confirmCommitments(selectedRow.doc.file_id, selectedRow.form.form_id, selectedRow.exam.commitments.length);
+      if (!live()) return;
+      try { await data.refreshDoc(selectedRow.doc.file_id); } catch { /* the confirmation is stored */ }
+    } catch (err) {
+      if (!live()) return;
+      setNotice({ tone: "error", text: `אישור מספר ההתחייבויות נכשל: ${errorMessage(err)}` });
+      if (err instanceof ApiError && err.status === 409) {
+        try { await data.refreshDoc(selectedRow.doc.file_id); } catch { /* keep the message */ }
+      }
     } finally {
       if (live()) setApproving(false);
     }
@@ -490,6 +513,13 @@ export default function ReviewWorkspaceV2() {
                 {readyRowSelected && (
                   <button type="button" className="btn btn--ghost btn--sm" disabled title="החזרה לבדיקה (Reopen) דורשת מעבר מצב בשרת. תלוי ב-Backend.">
                     החזרה לבדיקה <span className="v2-dep">Backend</span>
+                  </button>
+                )}
+                {pane.kind === "row" && countOpen && (
+                  <button type="button" className="btn btn--secondary btn--sm" onClick={() => void handleConfirmCommitments()}
+                          disabled={savingCell !== null || approving}
+                          title="בדקתי במקור: אלה כל ההתחייבויות בטופס. סוגר את ההערה 'מספר ההתחייבויות בטופס אינו ודאי'.">
+                    אין התחייבויות נוספות ({selectedRow?.exam.commitments.length})
                   </button>
                 )}
                 {pane.kind === "forms" && (
