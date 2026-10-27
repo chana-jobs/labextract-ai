@@ -1,3 +1,3 @@
 # Privacy: send the model only the regions it needs, the full page only when a field is not located: on / off
 # To change: edit the word below in GitHub and commit. The site redeploys within a few minutes.
-off
+on
