@@ -24,6 +24,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from functools import lru_cache
 from pathlib import Path
 
+from extraction import confirm
 from shared.contracts import (
     Attribution, Candidate, Dimensions, Evidence, ExtractionStatus, FieldName, FieldValue, Form, ProcessingStatus,
     Readability, UncertaintyReason, Verification,
@@ -199,7 +200,7 @@ def _region_crops(content: bytes, extension: str, page0: int, regions: list[dict
         if r["kind"] == "central_annotation":       # a tight ink block: keep a margin so no digit is cut
             mx, my = (x1 - x0) // 8 + 10, (y1 - y0) // 8 + 10
             x0, y0, x1, y1 = x0 - mx, y0 - my, x1 + mx, y1 + my
-        elif r["kind"] == "commitment_cell":        # one token / cell box: room for the whole number, not the row
+        elif r["kind"] in ("commitment_cell", "confirm_value"):   # one token / cell box: the value, not the row
             mx, my = (x1 - x0) // 6 + 10, (y1 - y0) + 10
             x0, y0, x1, y1 = x0 - mx, y0 - my, x1 + mx, y1 + my
         c = img[max(0, y0):max(0, y1), max(0, x0):max(0, x1)]
@@ -233,7 +234,9 @@ def _run_crops(content: bytes, extension: str, page0: int, local: dict):
         return "sent", None
     finally:
         gc.collect()
+    targets = [{k: r.get(k) for k in ("target", "value", "item_id")} for k, _, r in regions if k == "confirm_value"]
     res = {"fields": res["fields"], "commitments": res.get("commitments", []),
+           "confirmations": list(zip(targets, res.get("confirmations", []))),
            "log": {"crop_reads": res["log"]["crop_reads"], "crop_kinds": res["log"]["crop_kinds"]}}
     _report(page0, time.monotonic() - t0, res)
     return "sent", res
@@ -307,7 +310,51 @@ def apply(content: bytes, extension: str, page0: int, form: Form, pending: Futur
         c = by_id.get(f"{form.form_id}-{entry['item_id']}")
         if c is not None:
             c.number = _merge(c.number, "commitment_number", entry, page0, auto)
+    for target, readings in res.get("confirmations", []):   # crops-first only: a second reader for OCR values
+        _confirm_ocr_value(form, exam, target, readings, page0, auto)
     return Form.model_validate(form.model_dump())
+
+
+def _same_institution(a: str, b: str) -> bool:
+    try:
+        from labextract_ocr.institutions import resolve_text
+    except ImportError:                    # the OCR engine is not loaded: never confirm a sender
+        return False
+    ra, rb = resolve_text(a), resolve_text(b)
+    return bool(ra and rb and ra & rb)
+
+
+def _confirm_ocr_value(form: Form, exam, target: dict, readings: list, page0: int, auto: bool) -> None:
+    """A value the OCR proposed alone is confirmed when two different models, both "clear", read the same value in
+    its crop (a number by its digits, a sender as the same institution of the approved list): it becomes approvable
+    (extraction/confirm.py). Any clear reading of something else flags the OCR value for the reviewer. The OCR's
+    decision itself is never changed; with auto-approve off nothing is marked."""
+    if target["target"] == "sender":
+        holder, fv = None, exam.sender
+        same = lambda text: _same_institution(text, target["value"])  # noqa: E731
+    else:
+        same = lambda text: confirm.digits(text) == confirm.digits(target["value"])  # noqa: E731
+        if target["target"] == "central":
+            holder = next((i for i, f in enumerate(exam.central_numbers) if f.normalized == target["value"]), None)
+            fv = exam.central_numbers[holder] if holder is not None else None
+        else:
+            holder = {c.commitment_id: c for c in exam.commitments}.get(f"{form.form_id}-{target.get('item_id')}")
+            fv = holder.number if holder is not None else None
+    if fv is None or not confirm.confirmable(fv) or fv.normalized != target["value"]:
+        return
+    clear = [(m, t) for m, t, leg in readings if leg == "clear" and t.strip()]
+    if any(not same(t) for _, t in clear):
+        new = fv.model_copy(update={"flags": list(fv.flags) + ["second_reader_disagrees"]})
+    elif auto and len({m for m, _ in clear}) >= 2:
+        new = confirm.confirmed(fv, Verification.AGREEMENT, page0, "two models read the same value in its crop")
+    else:
+        return
+    if target["target"] == "sender":
+        exam.sender = new
+    elif target["target"] == "central":
+        exam.central_numbers[holder] = new
+    else:
+        holder.number = new
 
 
 def _merge_central(old: list[FieldValue], entry: dict, page0: int, auto: bool) -> list[FieldValue]:

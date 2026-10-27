@@ -14,3 +14,5 @@ __pycache__/
 out_measure/
 out_measure_cached/
 out_measure*.log
+# labx model response cache (patient-page answers) when labx runs from this folder
+/cache/

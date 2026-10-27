@@ -1,9 +1,13 @@
 """Switches the lab turns on / off by editing one file in GitHub: the commit redeploys the site (Vercel), and the
 server reads the file when it starts.
 
-backend/auto_approve.txt: "on" / "off". On: values two different models agreed on (labx consensus, every check
-passed) are approved automatically (AUTO_APPROVED with rule id + policy version, backend/readiness.py); values only
-the OCR read, and names, stay PENDING. An environment variable LABX_AUTO_APPROVE ("1" / "0") wins over the file.
+backend/auto_approve.txt: "on" / "off". On: values confirmed by two independent sources (two different models;
+the OCR + a barcode; the OCR + two models reading its crop) are approved automatically (AUTO_APPROVED with rule id +
+policy version, backend/readiness.py); a value with one source, and names, stay PENDING.
+An environment variable LABX_AUTO_APPROVE ("1" / "0") wins over the file.
+
+backend/crops_first.txt: "on" / "off". On: only regions located locally are sent to the model, the full page only
+when a field could not be located (LABX_MODE=crops_first). The environment variable LABX_MODE wins over the file.
 """
 from __future__ import annotations
 
@@ -11,6 +15,7 @@ import os
 from pathlib import Path
 
 AUTO_APPROVE_FILE = Path(__file__).with_name("auto_approve.txt")
+CROPS_FIRST_FILE = Path(__file__).with_name("crops_first.txt")
 
 
 def auto_approve_from_file(path: Path = AUTO_APPROVE_FILE) -> bool:
@@ -26,4 +31,7 @@ def auto_approve_from_file(path: Path = AUTO_APPROVE_FILE) -> bool:
 def load_switches() -> None:
     if "LABX_AUTO_APPROVE" not in os.environ:
         os.environ["LABX_AUTO_APPROVE"] = "1" if auto_approve_from_file() else "0"
-    print(f"[switches] auto-approve={'on' if os.environ['LABX_AUTO_APPROVE'] == '1' else 'off'}", flush=True)
+    if "LABX_MODE" not in os.environ:
+        os.environ["LABX_MODE"] = "crops_first" if auto_approve_from_file(CROPS_FIRST_FILE) else "full_page"
+    print(f"[switches] auto-approve={'on' if os.environ['LABX_AUTO_APPROVE'] == '1' else 'off'} "
+          f"mode={os.environ['LABX_MODE']}", flush=True)

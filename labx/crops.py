@@ -21,6 +21,7 @@ KINDS = {
     "central_annotation": "the lab's own handwritten note: the central number (6 digits, e.g. \"939158\"), usually "
                           "with the receipt date written under it (e.g. \"16/6/26\")",
     "commitment_cell": "a printed commitment (התחייבות) number in a table cell or next to its label",
+    "confirm_value": "one printed value - a number, or the name of an institution - to copy exactly",
 }
 
 _LEG = SCHEMA["properties"]["received_date_legibility"]
@@ -29,7 +30,11 @@ _EXTRA = {"central_number": {"type": "string"},
           "commitment_numbers": {"type": "array", "items": {
               "type": "object", "properties": {"image": {"type": "integer"}, "number": {"type": "string"},
                                                "legibility": _LEG},
-              "required": ["image", "number", "legibility"], "additionalProperties": False}}}
+              "required": ["image", "number", "legibility"], "additionalProperties": False}},
+          "confirm_readings": {"type": "array", "items": {
+              "type": "object", "properties": {"image": {"type": "integer"}, "text": {"type": "string"},
+                                               "legibility": _LEG},
+              "required": ["image", "text", "legibility"], "additionalProperties": False}}}
 SCHEMA_CROPS = {**SCHEMA,
                 "properties": {**{k: v for k, v in SCHEMA["properties"].items() if k != "form_dates"}, **_EXTRA},
                 "required": [k for k in SCHEMA["required"] if k != "form_dates"] + list(_EXTRA)}
@@ -60,6 +65,9 @@ written (usually 6). Not the date under it, not a phone, barcode, ID or commitme
 
 COMMITMENT NUMBERS: one entry per "commitment_cell" image (image = its number above): the commitment number in
 that image, every digit exactly as printed, including leading zeros. [] when there is no such image.
+
+CONFIRM READINGS: one entry per "confirm_value" image: the main printed value in it (the number, or the
+institution's name) copied exactly as printed, character by character. [] when there is no such image.
 
 A value that is not visible in these images does not exist for you: return "" and legibility "none".
 
@@ -121,9 +129,19 @@ def _commitments(reads, kinds, metas, min_agree):
     return out
 
 
+def _confirmations(reads, kinds):
+    """Per confirm_value crop, in order: every model's reading [(model, text, legibility)]. The caller compares them
+    with the OCR's value (a number by its digits, a sender as the same institution) - this module does not know it."""
+    images = [i for i, k in enumerate(kinds, 1) if k == "confirm_value"]
+    return [[(model, c.get("text", ""), c.get("legibility", "none"))
+             for model, r, _ in reads for c in (r or {}).get("confirm_readings") or [] if c.get("image") == image]
+            for image in images]
+
+
 def extract(crops, readers=None, min_agree=engine.MIN_AGREE, form_dates=(), commitments=()):
     """crops: [(kind, jpeg)] of one form; commitments: [{item_id, candidates}] for its commitment_cell crops, in
-    order. Returns {"fields", "commitments", "log"} (fields like engine.extract_page, plus central_number)."""
+    order. Returns {"fields", "commitments", "confirmations", "log"} (fields like engine.extract_page, plus
+    central_number; confirmations: per confirm_value crop, every model's reading)."""
     kinds, images = [k for k, _ in crops], [j for _, j in crops]
     reads = engine._ask_all(engine._slots(readers), prompt(kinds), images, SCHEMA_CROPS)
     votes, _ = engine.page_votes(reads)
@@ -150,4 +168,5 @@ def extract(crops, readers=None, min_agree=engine.MIN_AGREE, form_dates=(), comm
         fields["id"] = dict(fields["id"], value=None, status="review",
                             reason="crops: ID check digit fails (digits may be cut off at the crop edge)")
     log = {"crop_kinds": kinds, "crop_reads": {m: (r if r is not None else {"_error": e}) for m, r, e in reads}}
-    return {"fields": fields, "commitments": _commitments(reads, kinds, list(commitments), min_agree), "log": log}
+    return {"fields": fields, "commitments": _commitments(reads, kinds, list(commitments), min_agree),
+            "confirmations": _confirmations(reads, kinds), "log": log}
